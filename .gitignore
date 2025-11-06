@@ -8,8 +8,8 @@
 *.so
 *.dylib
 
-# Guppy binary
-guppy
+# Guppy binary (in root only)
+/guppy
 
 # Test binary, built with `go test -c`
 *.test
