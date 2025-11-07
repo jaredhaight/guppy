@@ -16,12 +16,20 @@ var (
 	Version   = "dev"
 	cfgFile   string
 	cfg       *config.Config
+	debug     bool
 )
 
 func main() {
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
+	}
+}
+
+// debugLog prints a debug message if debug mode is enabled
+func debugLog(format string, args ...interface{}) {
+	if debug {
+		fmt.Fprintf(os.Stderr, "[DEBUG] "+format+"\n", args...)
 	}
 }
 
@@ -114,6 +122,7 @@ var updateCmd = &cobra.Command{
 		}
 
 		downloadPath := filepath.Join(cfg.DownloadDir, latest.FileName)
+		debugLog("Computed download path: %s", downloadPath)
 		if err := repo.Download(latest, downloadPath); err != nil {
 			return fmt.Errorf("error downloading release: %w", err)
 		}
@@ -221,7 +230,8 @@ var initCmd = &cobra.Command{
 }
 
 func init() {
-	rootCmd.PersistentFlags().StringVarP(&cfgFile, "config", "c", "", "config file (default is $HOME/.config/guppy/guppy.json)")
+	rootCmd.PersistentFlags().StringVarP(&cfgFile, "config", "c", "", "config file (default is guppy.json in executable directory)")
+	rootCmd.PersistentFlags().BoolVarP(&debug, "debug", "d", false, "enable debug logging")
 
 	rootCmd.AddCommand(checkCmd)
 	rootCmd.AddCommand(updateCmd)
@@ -234,8 +244,12 @@ func loadConfig() error {
 	if cfgFile == "" {
 		cfgFile = config.GetDefaultConfigPath()
 	}
+	debugLog("Loading config from: %s", cfgFile)
 	cfg, err = config.Load(cfgFile)
-	return err
+	if err != nil {
+		return fmt.Errorf("%w\n\nYou can specify a config file location using the --config flag.\nTo create a template config file, run: guppy init --config <path>", err)
+	}
+	return nil
 }
 
 func createRepository() (repository.Repository, error) {
@@ -249,6 +263,7 @@ func createRepository() (repository.Repository, error) {
 		if cfg.Repository.AssetName != "" {
 			repo.SetAssetName(cfg.Repository.AssetName)
 		}
+		repo.SetDebug(debug)
 		return repo, nil
 	default:
 		return nil, fmt.Errorf("unsupported repository type: %s", cfg.Repository.Type)

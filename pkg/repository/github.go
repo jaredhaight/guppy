@@ -20,6 +20,7 @@ type GitHubRepository struct {
 	Token      string // Optional GitHub token for authenticated requests
 	AssetName  string // Optional: specific asset name to download
 	httpClient *http.Client
+	debug      bool
 }
 
 // NewGitHubRepository creates a new GitHub repository
@@ -37,6 +38,18 @@ func (g *GitHubRepository) SetAssetName(name string) {
 	g.AssetName = name
 }
 
+// SetDebug enables or disables debug logging
+func (g *GitHubRepository) SetDebug(enabled bool) {
+	g.debug = enabled
+}
+
+// debugLog prints a debug message if debug mode is enabled
+func (g *GitHubRepository) debugLog(format string, args ...interface{}) {
+	if g.debug {
+		fmt.Fprintf(os.Stderr, "[DEBUG] "+format+"\n", args...)
+	}
+}
+
 // githubRelease represents a GitHub release API response
 type githubRelease struct {
 	TagName     string    `json:"tag_name"`
@@ -51,6 +64,7 @@ type githubRelease struct {
 // GetLatestRelease returns the latest release from GitHub
 func (g *GitHubRepository) GetLatestRelease() (*Release, error) {
 	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/releases/latest", g.Owner, g.Repo)
+	g.debugLog("Fetching latest release from URL: %s", url)
 
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
@@ -89,6 +103,7 @@ func (g *GitHubRepository) GetRelease(version string) (*Release, error) {
 	}
 
 	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/releases/tags/%s", g.Owner, g.Repo, version)
+	g.debugLog("Fetching release for version %s from URL: %s", version, url)
 
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
@@ -129,6 +144,8 @@ func (g *GitHubRepository) Download(release *Release, dest string) error {
 	if release.DownloadURL == "" {
 		return fmt.Errorf("no download URL in release")
 	}
+
+	g.debugLog("Downloading from URL: %s to %s", release.DownloadURL, dest)
 
 	req, err := http.NewRequest("GET", release.DownloadURL, nil)
 	if err != nil {
@@ -177,14 +194,18 @@ func (g *GitHubRepository) convertGitHubRelease(ghRelease *githubRelease) (*Rele
 		return nil, fmt.Errorf("release has no assets")
 	}
 
+	g.debugLog("Release has %d asset(s)", len(ghRelease.Assets))
+
 	// Find the asset to download
 	var downloadURL, fileName string
 	if g.AssetName != "" {
+		g.debugLog("Looking for specific asset: %s", g.AssetName)
 		// Look for specific asset
 		for _, asset := range ghRelease.Assets {
 			if asset.Name == g.AssetName {
 				downloadURL = asset.BrowserDownloadURL
 				fileName = asset.Name
+				g.debugLog("Found matching asset: %s", fileName)
 				break
 			}
 		}
@@ -195,6 +216,7 @@ func (g *GitHubRepository) convertGitHubRelease(ghRelease *githubRelease) (*Rele
 		// Use the first asset
 		downloadURL = ghRelease.Assets[0].BrowserDownloadURL
 		fileName = ghRelease.Assets[0].Name
+		g.debugLog("Using first asset: %s", fileName)
 	}
 
 	return &Release{
