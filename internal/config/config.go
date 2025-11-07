@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -54,6 +55,12 @@ func Load(configPath string) (*Config, error) {
 		return nil, fmt.Errorf("error reading config file: %w", err)
 	}
 
+	// Check for unknown keys before unmarshaling
+	configFile := v.ConfigFileUsed()
+	if err := validateConfigKeys(configFile); err != nil {
+		return nil, err
+	}
+
 	var config Config
 	if err := v.Unmarshal(&config); err != nil {
 		return nil, fmt.Errorf("error unmarshaling config: %w", err)
@@ -67,10 +74,65 @@ func Load(configPath string) (*Config, error) {
 	return &config, nil
 }
 
+// validateConfigKeys checks for unknown keys in the config file
+func validateConfigKeys(configPath string) error {
+	// Read the config file
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return fmt.Errorf("error reading config file for validation: %w", err)
+	}
+
+	// Parse as generic map
+	var rawConfig map[string]interface{}
+	if err := json.Unmarshal(data, &rawConfig); err != nil {
+		return fmt.Errorf("error parsing config file: %w", err)
+	}
+
+	// Define valid top-level keys
+	validKeys := map[string]bool{
+		"repository":      true,
+		"current_version": true,
+		"target_path":     true,
+		"applier":         true,
+		"download_dir":    true,
+	}
+
+	// Check for unknown top-level keys
+	for key := range rawConfig {
+		if !validKeys[key] {
+			return fmt.Errorf("unknown configuration key: %s", key)
+		}
+	}
+
+	// Validate repository keys if present
+	if repo, ok := rawConfig["repository"].(map[string]interface{}); ok {
+		validRepoKeys := map[string]bool{
+			"type":       true,
+			"owner":      true,
+			"repo":       true,
+			"token":      true,
+			"asset_name": true,
+		}
+
+		for key := range repo {
+			if !validRepoKeys[key] {
+				return fmt.Errorf("unknown configuration key in repository: %s", key)
+			}
+		}
+	}
+
+	return nil
+}
+
 // Validate validates the configuration
 func (c *Config) Validate() error {
 	if c.Repository.Type == "" {
 		return fmt.Errorf("repository type is required")
+	}
+
+	// Validate repository type
+	if c.Repository.Type != "github" {
+		return fmt.Errorf("invalid repository type: %s (valid values: github)", c.Repository.Type)
 	}
 
 	if c.Repository.Type == "github" {
@@ -88,6 +150,11 @@ func (c *Config) Validate() error {
 
 	if c.Applier == "" {
 		return fmt.Errorf("applier is required")
+	}
+
+	// Validate applier type
+	if c.Applier != "binary" && c.Applier != "archive" {
+		return fmt.Errorf("invalid applier type: %s (valid values: binary, archive)", c.Applier)
 	}
 
 	return nil
