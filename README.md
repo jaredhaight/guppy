@@ -1,13 +1,13 @@
 # Guppy
-Guppy is a software update helper. It checks for new releases, downloads them, and updates software. It's designed for two use cases.
+Guppy is a software update helper.]It's designed for two use cases.
 
 1. Developers who want a simple update mechanism for their deployed applications. This was my primary idea in making this as the problem comes up with most everything I develop.
 2. Users who want to keep an open source application hosted on github up to date on their machine. Because guppy can be pointed at different config files, you can use it to update your local install of an application straight from the repo.
 
 # How it works
-Guppy abstracts providers behind "release repositories" that allow it to check for updates, download them, and verify them. Updates can either be in binary or zip format (zip, tar.gz, etc). Once verified, guppy will then replace either the target binary or the files in the destination folder.
+Guppy can check for new releases either through github or your own webserver. Releases can be in either binary or zip format (zip, tar.gz, etc). Gupy handles checking for updates, downloading new releases, verifying them, and copying the contents.
 
-Guppy is designed to be simple, so you may need to wrap it in a script if you need to handle things likes file locks, clearing cached data, seeding databases, etc. 
+Guppy is designed to be simple. You will need to wrap it in a script if you need to handle more complext installation tasks like stoping services, clearing cached data, seeding databases, etc. 
 
 ### Providers
 Guppy currently supports two update providers: Github and HTTP. Github leverages github releases and works with public or private repos. HTTP gets a JSON blob of relase information from a web server. The JSON is in following format:
