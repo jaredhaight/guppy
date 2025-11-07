@@ -72,7 +72,9 @@ func (g *GitHubRepository) GetLatestRelease() (*Release, error) {
 	}
 
 	if g.Token != "" {
-		req.Header.Set("Authorization", fmt.Sprintf("token %s", g.Token))
+		authValue := fmt.Sprintf("token %s", g.Token)
+		req.Header.Set("Authorization", authValue)
+		g.debugLog("Request header set: Authorization: %s", authValue)
 	}
 	req.Header.Set("Accept", "application/vnd.github.v3+json")
 
@@ -111,7 +113,9 @@ func (g *GitHubRepository) GetRelease(version string) (*Release, error) {
 	}
 
 	if g.Token != "" {
-		req.Header.Set("Authorization", fmt.Sprintf("token %s", g.Token))
+		authValue := fmt.Sprintf("token %s", g.Token)
+		req.Header.Set("Authorization", authValue)
+		g.debugLog("Request header set: Authorization: %s", authValue)
 	}
 	req.Header.Set("Accept", "application/vnd.github.v3+json")
 
@@ -153,7 +157,9 @@ func (g *GitHubRepository) Download(release *Release, dest string) error {
 	}
 
 	if g.Token != "" {
-		req.Header.Set("Authorization", fmt.Sprintf("token %s", g.Token))
+		authValue := fmt.Sprintf("token %s", g.Token)
+		req.Header.Set("Authorization", authValue)
+		g.debugLog("Request header set: Authorization: %s", authValue)
 	}
 
 	resp, err := g.httpClient.Do(req)
