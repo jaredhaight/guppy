@@ -21,10 +21,11 @@ type Config struct {
 // RepositoryConfig represents repository configuration
 type RepositoryConfig struct {
 	Type      string `json:"type" mapstructure:"type"`
-	Owner     string `json:"owner" mapstructure:"owner"`
-	Repo      string `json:"repo" mapstructure:"repo"`
+	Owner     string `json:"owner,omitempty" mapstructure:"owner"`
+	Repo      string `json:"repo,omitempty" mapstructure:"repo"`
 	Token     string `json:"token,omitempty" mapstructure:"token"`
 	AssetName string `json:"asset_name,omitempty" mapstructure:"asset_name"`
+	URL       string `json:"url,omitempty" mapstructure:"url"`
 }
 
 // Load loads configuration from a JSON file
@@ -112,6 +113,7 @@ func validateConfigKeys(configPath string) error {
 			"repo":       true,
 			"token":      true,
 			"asset_name": true,
+			"url":        true,
 		}
 
 		for key := range repo {
@@ -131,8 +133,8 @@ func (c *Config) Validate() error {
 	}
 
 	// Validate repository type
-	if c.Repository.Type != "github" {
-		return fmt.Errorf("invalid repository type: %s (valid values: github)", c.Repository.Type)
+	if c.Repository.Type != "github" && c.Repository.Type != "http" {
+		return fmt.Errorf("invalid repository type: %s (valid values: github, http)", c.Repository.Type)
 	}
 
 	if c.Repository.Type == "github" {
@@ -141,6 +143,12 @@ func (c *Config) Validate() error {
 		}
 		if c.Repository.Repo == "" {
 			return fmt.Errorf("repository repo is required for GitHub")
+		}
+	}
+
+	if c.Repository.Type == "http" {
+		if c.Repository.URL == "" {
+			return fmt.Errorf("repository url is required for HTTP")
 		}
 	}
 

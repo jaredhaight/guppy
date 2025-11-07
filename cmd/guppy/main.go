@@ -267,6 +267,10 @@ func createRepository() (repository.Repository, error) {
 		}
 		repo.SetDebug(debug)
 		return repo, nil
+	case "http":
+		repo := repository.NewHTTPRepository(cfg.Repository.URL)
+		repo.SetDebug(debug)
+		return repo, nil
 	default:
 		return nil, fmt.Errorf("unsupported repository type: %s", cfg.Repository.Type)
 	}

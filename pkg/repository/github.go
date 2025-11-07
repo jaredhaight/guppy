@@ -59,6 +59,7 @@ type githubRelease struct {
 		ID                 int64  `json:"id"`
 		Name               string `json:"name"`
 		BrowserDownloadURL string `json:"browser_download_url"`
+		Digest             string `json:"digest"` // SHA256 checksum in format "sha256:hexvalue"
 	} `json:"assets"`
 }
 
@@ -217,7 +218,7 @@ func (g *GitHubRepository) convertGitHubRelease(ghRelease *githubRelease) (*Rele
 	g.debugLog("Release has %d asset(s)", len(ghRelease.Assets))
 
 	// Find the asset to download
-	var downloadURL, fileName string
+	var downloadURL, fileName, checksum string
 	var assetID int64
 	if g.AssetName != "" {
 		g.debugLog("Looking for specific asset: %s", g.AssetName)
@@ -227,7 +228,8 @@ func (g *GitHubRepository) convertGitHubRelease(ghRelease *githubRelease) (*Rele
 				downloadURL = asset.BrowserDownloadURL
 				fileName = asset.Name
 				assetID = asset.ID
-				g.debugLog("Found matching asset: %s (ID: %d)", fileName, assetID)
+				checksum = parseDigest(asset.Digest)
+				g.debugLog("Found matching asset: %s (ID: %d, Checksum: %s)", fileName, assetID, checksum)
 				break
 			}
 		}
@@ -239,7 +241,8 @@ func (g *GitHubRepository) convertGitHubRelease(ghRelease *githubRelease) (*Rele
 		downloadURL = ghRelease.Assets[0].BrowserDownloadURL
 		fileName = ghRelease.Assets[0].Name
 		assetID = ghRelease.Assets[0].ID
-		g.debugLog("Using first asset: %s (ID: %d)", fileName, assetID)
+		checksum = parseDigest(ghRelease.Assets[0].Digest)
+		g.debugLog("Using first asset: %s (ID: %d, Checksum: %s)", fileName, assetID, checksum)
 	}
 
 	// If we have a token, use the GitHub Asset API URL instead
@@ -248,11 +251,32 @@ func (g *GitHubRepository) convertGitHubRelease(ghRelease *githubRelease) (*Rele
 		g.debugLog("Using GitHub Asset API URL: %s", downloadURL)
 	}
 
+	if checksum == "" {
+		g.debugLog("WARNING: No checksum available for asset %s", fileName)
+	}
+
 	return &Release{
 		Version:     ghRelease.TagName,
 		DownloadURL: downloadURL,
 		ReleaseDate: ghRelease.PublishedAt,
 		FileName:    fileName,
 		AssetID:     assetID,
+		Checksum:    checksum,
 	}, nil
+}
+
+// parseDigest extracts the hex value from a digest string in format "sha256:hexvalue"
+// Returns empty string if the digest is empty or invalid
+func parseDigest(digest string) string {
+	if digest == "" {
+		return ""
+	}
+
+	// GitHub API returns digest in format "sha256:hexvalue"
+	parts := strings.SplitN(digest, ":", 2)
+	if len(parts) == 2 && parts[0] == "sha256" {
+		return parts[1]
+	}
+
+	return ""
 }
