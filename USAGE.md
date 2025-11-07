@@ -255,7 +255,7 @@ Update from a custom web server using the HTTP repository type.
 [
   {
     "version": "2025.281.3",
-    "url": "https://updates.example.com/myapp/download.zip",
+    "url": "https://updates.example.com/myapp/download-v3.zip",
     "sha256": "997c3ad2cd376d4cc609c3879b831fcfcf785cea14b427c8d7bfc40f77e0c3eb"
   },
   {
@@ -276,7 +276,6 @@ Update from a custom web server using the HTTP repository type.
 - Each release must have a `version` and `url` field
 - Checksums are optional but recommended. Supported algorithms: `sha256`, `sha1`, `md5`
 - If multiple checksums are provided, guppy uses the highest security algorithm (SHA256 > SHA1 > MD5)
-- Releases can be in any order in the JSON array; guppy will automatically find the latest version
 
 ## Checksum Verification
 
@@ -288,7 +287,6 @@ Guppy automatically verifies checksums to ensure the downloaded file hasn't been
 **For HTTP repositories:**
 - You can specify `sha256`, `sha1`, or `md5` checksums in the releases.json file
 - If multiple checksums are provided, guppy uses the most secure algorithm available (SHA256 > SHA1 > MD5)
-- While checksums are optional, they are strongly recommended for security
 
 If checksum verification fails, the downloaded file will be deleted and the update will not be applied.
 
@@ -297,45 +295,3 @@ If checksum verification fails, the downloaded file will be deleted and the upda
 The archive applier supports:
 - `.zip` files
 - `.tar.gz` and `.tgz` files
-
-## Security Considerations
-
-1. **GitHub Token**: Store your GitHub token securely. Consider using environment variables or secure configuration management.
-2. **Target Path Permissions**: Ensure guppy has appropriate permissions to write to the target path.
-3. **Archive Extraction**: The archive applier includes protection against path traversal attacks (ZipSlip).
-4. **Checksums**: Always provide checksums in your releases (SHA256 recommended) to verify file integrity.
-5. **HTTPS**: When using HTTP repositories, always use HTTPS URLs to prevent man-in-the-middle attacks.
-
-## Troubleshooting
-
-### Error: "repository owner is required"
-Make sure your config file includes all required fields in the repository section.
-
-### Error: "checksum verification failed"
-The downloaded file may be corrupted. Try downloading again or check if the release is valid.
-
-### Error: "error applying update: permission denied"
-Guppy needs write permissions to the target path. Try running with appropriate permissions or use `sudo` if necessary.
-
-## Integration
-
-Guppy can be integrated into automation workflows:
-
-```bash
-# Check for updates and only update if available
-if guppy check | grep -q "New version available"; then
-    guppy update
-    systemctl restart myapp
-fi
-```
-
-## Development
-
-To contribute to Guppy or build from source:
-
-```bash
-git clone https://github.com/jaredhaight/guppy
-cd guppy
-go build -o guppy ./cmd/guppy
-go test ./...
-```
