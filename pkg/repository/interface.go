@@ -9,6 +9,7 @@ type Release struct {
 	Checksum    string
 	ReleaseDate time.Time
 	FileName    string
+	AssetID     int64 // GitHub asset ID (0 if not applicable)
 }
 
 // Repository checks for new releases and downloads them
