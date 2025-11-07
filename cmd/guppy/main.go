@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/jaredhaight/guppy/internal/config"
 	"github.com/jaredhaight/guppy/pkg/applier"
@@ -182,8 +184,9 @@ var versionCmd = &cobra.Command{
 }
 
 var initCmd = &cobra.Command{
-	Use:   "init",
-	Short: "Create a template configuration file",
+	Use:   "init [type]",
+	Short: "Create a template configuration file (type: github or http)",
+	Args:  cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		configPath := cfgFile
 		if configPath == "" {
@@ -195,19 +198,66 @@ var initCmd = &cobra.Command{
 			return fmt.Errorf("config file already exists at %s", configPath)
 		}
 
-		// Create a template config with example values
-		templateConfig := &config.Config{
-			Repository: config.RepositoryConfig{
-				Type:      "github",
-				Owner:     "owner",
-				Repo:      "repo",
-				Token:     "",
-				AssetName: "",
-			},
-			CurrentVersion: "",
-			TargetPath:     "/path/to/target/binary",
-			Applier:        "binary",
-			DownloadDir:    filepath.Join(os.TempDir(), "guppy"),
+		// Determine repository type
+		var repoType string
+		if len(args) == 0 {
+			// Interactive prompt
+			fmt.Println("Select repository type:")
+			fmt.Println("  1. github")
+			fmt.Println("  2. http")
+			fmt.Print("Enter choice (1 or 2): ")
+
+			reader := bufio.NewReader(os.Stdin)
+			input, err := reader.ReadString('\n')
+			if err != nil {
+				return fmt.Errorf("error reading input: %w", err)
+			}
+
+			input = strings.TrimSpace(input)
+			switch input {
+			case "1", "github":
+				repoType = "github"
+			case "2", "http":
+				repoType = "http"
+			default:
+				return fmt.Errorf("invalid choice: %s\nUsage: guppy init [github|http]", input)
+			}
+		} else {
+			// Validate argument
+			repoType = strings.ToLower(args[0])
+			if repoType != "github" && repoType != "http" {
+				return fmt.Errorf("invalid repository type: %s\nValid types: github, http", args[0])
+			}
+		}
+
+		// Create template config based on repository type
+		var templateConfig *config.Config
+
+		if repoType == "github" {
+			templateConfig = &config.Config{
+				Repository: config.RepositoryConfig{
+					Type:      "github",
+					Owner:     "owner",
+					Repo:      "repo",
+					Token:     "",
+					AssetName: "",
+				},
+				CurrentVersion: "",
+				TargetPath:     "/path/to/target/binary",
+				Applier:        "binary",
+				DownloadDir:    filepath.Join(os.TempDir(), "guppy"),
+			}
+		} else { // http
+			templateConfig = &config.Config{
+				Repository: config.RepositoryConfig{
+					Type: "http",
+					URL:  "https://example.com/releases.json",
+				},
+				CurrentVersion: "",
+				TargetPath:     "/path/to/target/binary",
+				Applier:        "binary",
+				DownloadDir:    filepath.Join(os.TempDir(), "guppy"),
+			}
 		}
 
 		// Save the template config
@@ -215,17 +265,38 @@ var initCmd = &cobra.Command{
 			return fmt.Errorf("error creating config file: %w", err)
 		}
 
-		fmt.Printf("✓ Created template config file at: %s\n", configPath)
-		fmt.Println("\nPlease edit the config file and update the following fields:")
-		fmt.Println("  - repository.owner: GitHub repository owner")
-		fmt.Println("  - repository.repo: GitHub repository name")
-		fmt.Println("  - target_path: Path where the binary should be installed")
-		fmt.Println("\nOptional fields:")
-		fmt.Println("  - repository.token: GitHub personal access token (for private repos or higher rate limits)")
-		fmt.Println("  - repository.asset_name: Specific asset name pattern to download")
-		fmt.Println("  - current_version: Current version (will be auto-updated after first update)")
-		fmt.Println("  - applier: Type of applier (binary or archive)")
-		fmt.Println("  - download_dir: Directory for temporary downloads")
+		fmt.Printf("✓ Created %s template config file at: %s\n", repoType, configPath)
+
+		// Print help text based on repository type
+		if repoType == "github" {
+			fmt.Println("\nPlease edit the config file and update the following fields:")
+			fmt.Println("  - repository.owner: GitHub repository owner")
+			fmt.Println("  - repository.repo: GitHub repository name")
+			fmt.Println("  - target_path: Path where the binary should be installed")
+			fmt.Println("\nOptional fields:")
+			fmt.Println("  - repository.token: GitHub personal access token (for private repos or higher rate limits)")
+			fmt.Println("  - repository.asset_name: Specific asset name to download")
+			fmt.Println("  - current_version: Current version (will be auto-updated after first update)")
+			fmt.Println("  - applier: Type of applier (binary or archive)")
+			fmt.Println("  - download_dir: Directory for temporary downloads")
+		} else { // http
+			fmt.Println("\nPlease edit the config file and update the following fields:")
+			fmt.Println("  - repository.url: URL to your releases.json file")
+			fmt.Println("  - target_path: Path where the binary should be installed")
+			fmt.Println("\nOptional fields:")
+			fmt.Println("  - current_version: Current version (will be auto-updated after first update)")
+			fmt.Println("  - applier: Type of applier (binary or archive)")
+			fmt.Println("  - download_dir: Directory for temporary downloads")
+			fmt.Println("\nYour releases.json file should be a JSON array with this format:")
+			fmt.Println(`  [
+    {
+      "version": "1.0.0",
+      "url": "https://example.com/download.zip",
+      "sha256": "abc123..." (optional but recommended)
+    }
+  ]`)
+			fmt.Println("\nSee USAGE.md for complete releases.json format documentation.")
+		}
 
 		return nil
 	},

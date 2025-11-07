@@ -35,11 +35,16 @@ Guppy uses a JSON configuration file. By default, it looks for `guppy.json` in t
 ### Configuration Fields
 
 #### repository
-- `type` (required): Repository type. Currently supports `github`
+- `type` (required): Repository type. Supports `github` and `http`
+
+**For GitHub repositories:**
 - `owner` (required): Repository owner/organization name
 - `repo` (required): Repository name
 - `token` (optional): GitHub personal access token for private repos or higher rate limits
 - `asset_name` (optional): Specific asset name to download. If not specified, uses the first asset
+
+**For HTTP repositories:**
+- `url` (required): URL to the releases.json file containing release information
 
 #### current_version
 - Current version of the software using Sematic versioning (e.g., "v1.0.0" or "2025.1107.01", etc). 
@@ -58,7 +63,6 @@ Guppy uses a JSON configuration file. By default, it looks for `guppy.json` in t
 #### download_dir (optional)
 - Directory where releases are downloaded
 - Default: `{OS_TEMP_DIR}/guppy` (e.g., `/tmp/guppy` on Linux/macOS, `C:\Users\{USERNAME}\AppData\Local\Temp\guppy` on Windows)
-- If not specified, guppy automatically uses the appropriate temp directory for your operating system
 
 ## Command-Line Flags
 
@@ -128,13 +132,38 @@ guppy version
 
 ### guppy init
 
-Create a template configuration file in the current directory.
+Create a template configuration file for a specific repository type.
 
+**Usage:**
+```bash
+guppy init [type]
+```
+
+**Arguments:**
+- `type` (optional): Repository type - either `github` or `http`
+  - If not specified, guppy will prompt you to select a type interactively
+
+**Examples:**
+
+Create a GitHub repository template:
+```bash
+guppy init github
+```
+
+Create an HTTP repository template:
+```bash
+guppy init http
+```
+
+Interactive mode (prompts for repository type):
 ```bash
 guppy init
 ```
 
-This creates a `guppy.json` file with default values that you can customize for your application.
+This creates a `guppy.json` file with default values that you can customize for your application. The template will be tailored to the selected repository type:
+
+- **GitHub template**: Includes fields for `owner`, `repo`, `token`, and `asset_name`
+- **HTTP template**: Includes field for `url` pointing to your releases.json file
 
 ## Examples
 
@@ -204,11 +233,64 @@ Use a GitHub token for private repositories.
 }
 ```
 
+### Example 4: HTTP Repository
+
+Update from a custom web server using the HTTP repository type.
+
+**Config file:**
+```json
+{
+  "repository": {
+    "type": "http",
+    "url": "https://updates.example.com/myapp/releases.json"
+  },
+  "current_version": "1.0.0",
+  "target_path": "/usr/local/bin/myapp",
+  "applier": "binary"
+}
+```
+
+**releases.json format:**
+```json
+[
+  {
+    "version": "2025.281.3",
+    "url": "https://updates.example.com/myapp/download.zip",
+    "sha256": "997c3ad2cd376d4cc609c3879b831fcfcf785cea14b427c8d7bfc40f77e0c3eb"
+  },
+  {
+    "version": "2025.281.2",
+    "url": "https://updates.example.com/myapp/download-v2.zip",
+    "sha1": "367c432837f71657db863dae11a71202414f36d8"
+  },
+  {
+    "version": "2025.281.1",
+    "url": "https://updates.example.com/myapp/download-v1.zip",
+    "md5": "d1c47df9c7d692538e6744fea9d826b1"
+  }
+]
+```
+
+**Notes:**
+- The `releases.json` file must be a JSON array of release objects
+- Each release must have a `version` and `url` field
+- Checksums are optional but recommended. Supported algorithms: `sha256`, `sha1`, `md5`
+- If multiple checksums are provided, guppy uses the highest security algorithm (SHA256 > SHA1 > MD5)
+- Releases can be in any order in the JSON array; guppy will automatically find the latest version
+
 ## Checksum Verification
 
-Guppy automatically verifies SHA256 checksums if they are provided in the GitHub release. This ensures the downloaded file hasn't been corrupted or tampered with.
+Guppy automatically verifies checksums to ensure the downloaded file hasn't been corrupted or tampered with.
 
-If checksum verification fails, the update will not be applied.
+**For GitHub repositories:**
+- Guppy uses SHA256 checksums if provided in the GitHub release asset digest
+
+**For HTTP repositories:**
+- You can specify `sha256`, `sha1`, or `md5` checksums in the releases.json file
+- If multiple checksums are provided, guppy uses the most secure algorithm available (SHA256 > SHA1 > MD5)
+- While checksums are optional, they are strongly recommended for security
+
+If checksum verification fails, the downloaded file will be deleted and the update will not be applied.
 
 ## Supported Archive Formats
 
@@ -221,6 +303,8 @@ The archive applier supports:
 1. **GitHub Token**: Store your GitHub token securely. Consider using environment variables or secure configuration management.
 2. **Target Path Permissions**: Ensure guppy has appropriate permissions to write to the target path.
 3. **Archive Extraction**: The archive applier includes protection against path traversal attacks (ZipSlip).
+4. **Checksums**: Always provide checksums in your releases (SHA256 recommended) to verify file integrity.
+5. **HTTPS**: When using HTTP repositories, always use HTTPS URLs to prevent man-in-the-middle attacks.
 
 ## Troubleshooting
 
