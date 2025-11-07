@@ -9,8 +9,8 @@ Guppy abstracts providers behind "release repositories" that allow it to check f
 
 Guppy is designed to be simple, so you may need to wrap it in a script if you need to handle things likes file locks, clearing cached data, seeding databases, etc. 
 
-## Providers
-Guppy currently supports two update providers: Github and HTTP. Github leverages github releases and works with public or private repos. HTTP uses a `releases.json` on a web server for release information. The file uses the following format:
+### Providers
+Guppy currently supports two update providers: Github and HTTP. Github leverages github releases and works with public or private repos. HTTP gets a JSON blob of relase information from a web server. The JSON is in following format:
 
 ```json
 [
@@ -24,12 +24,14 @@ Guppy currently supports two update providers: Github and HTTP. Github leverages
 ]
 ```
 
-The md5, sha1, and sha256 hash values are all optional. While you can specify more than one hashing algorithm if you'd like,  Guppy will use the highest value hashing algorithm by default (sha256 > sha1 > md5)
+This can either be a file stored on a webserver (http://example.com/release.json) or a regular endpoint (http://example.com/updates/) 
+
+The md5, sha1, and sha256 hash values are all optional. While you can specify more than one hashing algorithm if you'd like,  Guppy will use the most secure hashing algorithm by default (sha256 > sha1 > md5)
 
 # Configuration
 Configuration is handled through a `guppy.json` config file.
 
-## Example Github Config
+### Example Github Config
 ```json
 {
   "applier": "binary",
@@ -46,7 +48,7 @@ Configuration is handled through a `guppy.json` config file.
 }
 ```
 
-## Example HTTP Config
+### Example HTTP Config
 ```json
 {
   "applier": "binary",
@@ -54,7 +56,7 @@ Configuration is handled through a `guppy.json` config file.
   "download_dir": "/tmp/guppy",
   "repository": {
     "type": "http",
-    "url": "http://www.example.com/releases.json"
+    "url": "http://www.example.com/releases"
   },
   "target_path": "./guppy"
 }
