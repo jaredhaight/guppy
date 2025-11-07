@@ -1,0 +1,13 @@
+{
+  "repository": {
+    "type": "github",
+    "owner": "user",
+    "repo": "project",
+    "token": "",
+    "asset_name": "project-linux-amd64"
+  },
+  "current_version": "1.0.0",
+  "target_path": "/usr/local/bin/myapp",
+  "applier": "binary",
+  "download_dir": "/tmp/guppy"
+}
