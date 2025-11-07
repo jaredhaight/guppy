@@ -207,7 +207,7 @@ var initCmd = &cobra.Command{
 			CurrentVersion: "",
 			TargetPath:     "/path/to/target/binary",
 			Applier:        "binary",
-			DownloadDir:    "/tmp/guppy",
+			DownloadDir:    filepath.Join(os.TempDir(), "guppy"),
 		}
 
 		// Save the template config

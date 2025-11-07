@@ -47,7 +47,7 @@ func Load(configPath string) (*Config, error) {
 
 	// Set defaults
 	v.SetDefault("applier", "binary")
-	v.SetDefault("download_dir", "/tmp/guppy")
+	v.SetDefault("download_dir", filepath.Join(os.TempDir(), "guppy"))
 	v.SetDefault("repository.type", "github")
 
 	// Read config file

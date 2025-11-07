@@ -3,12 +3,7 @@
 Guppy is a software update helper that checks for new releases, downloads them, and applies the new version.
 
 ## Installation
-
-```bash
-go install github.com/jaredhaight/guppy/cmd/guppy@latest
-```
-
-Or build from source:
+You can download the latest version of guppy from the [release page](https://github.com/jaredhaight/guppy/releases) or you can build from source:
 
 ```bash
 git clone https://github.com/jaredhaight/guppy
@@ -18,12 +13,7 @@ go build -o guppy ./cmd/guppy
 
 ## Configuration
 
-Guppy uses a JSON configuration file. By default, it looks for configuration in:
-- `./guppy.json`
-- `$HOME/.config/guppy/guppy.json`
-- `/etc/guppy/guppy.json`
-
-You can also specify a custom config file with the `-c` or `--config` flag.
+Guppy uses a JSON configuration file. By default, it looks for `guppy.json` in the same directory as the guppy executable. You can specify a custom config file location using the `--config` flag (see Command-Line Flags below).
 
 ### Configuration File Format
 
@@ -38,8 +28,7 @@ You can also specify a custom config file with the `-c` or `--config` flag.
   },
   "current_version": "1.0.0",
   "target_path": "/usr/local/bin/myapp",
-  "applier": "binary",
-  "download_dir": "/tmp/guppy"
+  "applier": "binary"
 }
 ```
 
@@ -53,22 +42,43 @@ You can also specify a custom config file with the `-c` or `--config` flag.
 - `asset_name` (optional): Specific asset name to download. If not specified, uses the first asset
 
 #### current_version
-- Current version of the software. Updated automatically after successful updates
-- Format: Semantic versioning (e.g., "1.0.0" or "v1.0.0")
+- Current version of the software using Sematic versioning (e.g., "v1.0.0" or "2025.1107.01", etc). 
+  - This value is updated (or set) once a new version has been downloaded. 
 
 #### target_path
 - Path where the update should be applied
-- For binary applier: path to the binary file
-- For archive applier: directory where archive will be extracted
+  - For binary applier: path to the binary file
+  - For archive applier: directory where archive will be extracted
 
 #### applier
 - Type of applier to use. Options:
   - `binary`: Replace a single binary file
   - `archive`: Extract a zip or tar.gz archive
 
-#### download_dir
+#### download_dir (optional)
 - Directory where releases are downloaded
-- Default: `/tmp/guppy`
+- Default: `{OS_TEMP_DIR}/guppy` (e.g., `/tmp/guppy` on Linux/macOS, `C:\Users\{USERNAME}\AppData\Local\Temp\guppy` on Windows)
+- If not specified, guppy automatically uses the appropriate temp directory for your operating system
+
+## Command-Line Flags
+
+Guppy supports the following command-line flags:
+
+### --config, -c
+Specify a custom configuration file path.
+
+```bash
+guppy check --config /path/to/config.json
+guppy update -c /path/to/config.json
+```
+
+### --debug, -d
+Enable debug logging for troubleshooting.
+
+```bash
+guppy check --debug
+guppy update -d
+```
 
 ## Commands
 
@@ -116,14 +126,15 @@ Show the version of guppy itself.
 guppy version
 ```
 
-### Custom Config File
+### guppy init
 
-Use a custom configuration file:
+Create a template configuration file in the current directory.
 
 ```bash
-guppy check --config /path/to/config.json
-guppy update --config /path/to/config.json
+guppy init
 ```
+
+This creates a `guppy.json` file with default values that you can customize for your application.
 
 ## Examples
 

@@ -8,6 +8,5 @@
   },
   "current_version": "1.0.0",
   "target_path": "/usr/local/bin/myapp",
-  "applier": "binary",
-  "download_dir": "/tmp/guppy"
+  "applier": "binary"
 }
