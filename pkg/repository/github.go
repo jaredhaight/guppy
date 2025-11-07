@@ -25,11 +25,22 @@ type GitHubRepository struct {
 
 // NewGitHubRepository creates a new GitHub repository
 func NewGitHubRepository(owner, repo, token string) *GitHubRepository {
+	client := &http.Client{
+		Timeout: 30 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			// Allow up to 10 redirects (default)
+			if len(via) >= 10 {
+				return fmt.Errorf("stopped after 10 redirects")
+			}
+			return nil
+		},
+	}
+
 	return &GitHubRepository{
 		Owner:      owner,
 		Repo:       repo,
 		Token:      token,
-		httpClient: &http.Client{Timeout: 30 * time.Second},
+		httpClient: client,
 	}
 }
 
@@ -164,20 +175,62 @@ func (g *GitHubRepository) Download(release *Release, dest string) error {
 	req.Header.Set("User-Agent", "guppy-updater")
 	req.Header.Set("Accept", "application/octet-stream")
 
-	if g.Token != "" {
-		authValue := fmt.Sprintf("token %s", g.Token)
-		req.Header.Set("Authorization", authValue)
-		g.debugLog("Request header set: Authorization: %s", authValue)
+	// Note: For browser_download_url endpoints, we generally should NOT send
+	// Authorization headers for public repos as GitHub may reject them.
+	// Authorization is only needed for API endpoints, not direct asset downloads.
+	// If needed for private repos in the future, we should use the API asset endpoint instead.
+	g.debugLog("Not sending Authorization header for browser_download_url (public release)")
+
+	// Create a client with redirect tracking for this request
+	redirectCount := 0
+	client := &http.Client{
+		Timeout: 30 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			redirectCount++
+			g.debugLog("Redirect #%d: %s -> %s", redirectCount, via[len(via)-1].URL.String(), req.URL.String())
+
+			// Go strips most headers on redirect by default
+			// Preserve necessary headers for redirects
+			if len(via) > 0 {
+				// Copy headers from original request
+				for key, values := range via[0].Header {
+					// Only copy certain headers - don't copy Authorization to different hosts
+					if key == "User-Agent" || key == "Accept" {
+						for _, value := range values {
+							req.Header.Add(key, value)
+						}
+					}
+					// Only copy Authorization header if staying on same host
+					if key == "Authorization" && req.URL.Host == via[0].URL.Host {
+						for _, value := range values {
+							req.Header.Add(key, value)
+						}
+					}
+				}
+			}
+
+			if len(via) >= 10 {
+				return fmt.Errorf("stopped after 10 redirects")
+			}
+			return nil
+		},
 	}
 
-	resp, err := g.httpClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("error downloading file: %w", err)
 	}
 	defer resp.Body.Close()
 
+	g.debugLog("Response status: %d %s", resp.StatusCode, resp.Status)
+	g.debugLog("Response headers: Content-Type=%s, Content-Length=%s",
+		resp.Header.Get("Content-Type"), resp.Header.Get("Content-Length"))
+
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("download failed with status %d", resp.StatusCode)
+		// Read response body for error details
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		g.debugLog("Response body: %s", string(bodyBytes))
+		return fmt.Errorf("download failed with status %d: %s", resp.StatusCode, string(bodyBytes))
 	}
 
 	// Create destination directory if it doesn't exist
