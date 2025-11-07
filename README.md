@@ -1,5 +1,5 @@
 # Guppy
-Guppy is a software update helper.]It's primarly designed around two use cases.
+Guppy is a software update helper. It's primarly designed around two use cases.
 
 1. Developers who want a simple update mechanism for their deployed applications. This was my primary idea in making this as the problem comes up with most everything I develop. You can ship guppy along with your app and use it to keep the app up to date.
 2. Users who want to keep an open source application hosted on github up to date on their machine. Because guppy can be pointed at different config files, you can use it to update your local install of an application straight from the repos releases.
