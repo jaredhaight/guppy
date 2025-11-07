@@ -170,12 +170,63 @@ var versionCmd = &cobra.Command{
 	},
 }
 
+var initCmd = &cobra.Command{
+	Use:   "init",
+	Short: "Create a template configuration file",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		configPath := cfgFile
+		if configPath == "" {
+			configPath = config.GetDefaultConfigPath()
+		}
+
+		// Check if config file already exists
+		if _, err := os.Stat(configPath); err == nil {
+			return fmt.Errorf("config file already exists at %s", configPath)
+		}
+
+		// Create a template config with example values
+		templateConfig := &config.Config{
+			Repository: config.RepositoryConfig{
+				Type:      "github",
+				Owner:     "owner",
+				Repo:      "repo",
+				Token:     "",
+				AssetName: "",
+			},
+			CurrentVersion: "",
+			TargetPath:     "/path/to/target/binary",
+			Applier:        "binary",
+			DownloadDir:    "/tmp/guppy",
+		}
+
+		// Save the template config
+		if err := templateConfig.Save(configPath); err != nil {
+			return fmt.Errorf("error creating config file: %w", err)
+		}
+
+		fmt.Printf("✓ Created template config file at: %s\n", configPath)
+		fmt.Println("\nPlease edit the config file and update the following fields:")
+		fmt.Println("  - repository.owner: GitHub repository owner")
+		fmt.Println("  - repository.repo: GitHub repository name")
+		fmt.Println("  - target_path: Path where the binary should be installed")
+		fmt.Println("\nOptional fields:")
+		fmt.Println("  - repository.token: GitHub personal access token (for private repos or higher rate limits)")
+		fmt.Println("  - repository.asset_name: Specific asset name pattern to download")
+		fmt.Println("  - current_version: Current version (will be auto-updated after first update)")
+		fmt.Println("  - applier: Type of applier (binary or archive)")
+		fmt.Println("  - download_dir: Directory for temporary downloads")
+
+		return nil
+	},
+}
+
 func init() {
 	rootCmd.PersistentFlags().StringVarP(&cfgFile, "config", "c", "", "config file (default is $HOME/.config/guppy/guppy.json)")
 
 	rootCmd.AddCommand(checkCmd)
 	rootCmd.AddCommand(updateCmd)
 	rootCmd.AddCommand(versionCmd)
+	rootCmd.AddCommand(initCmd)
 }
 
 func loadConfig() error {
