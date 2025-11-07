@@ -56,6 +56,7 @@ type githubRelease struct {
 	Name        string    `json:"name"`
 	PublishedAt time.Time `json:"published_at"`
 	Assets      []struct {
+		ID                 int64  `json:"id"`
 		Name               string `json:"name"`
 		BrowserDownloadURL string `json:"browser_download_url"`
 	} `json:"assets"`
@@ -153,6 +154,11 @@ func (g *GitHubRepository) Download(release *Release, dest string) error {
 		return fmt.Errorf("no download URL in release")
 	}
 
+	// Check if we're using the GitHub Asset API
+	isAssetAPI := strings.Contains(release.DownloadURL, "/releases/assets/")
+	if isAssetAPI {
+		g.debugLog("Using GitHub Asset API to download asset ID %d", release.AssetID)
+	}
 	g.debugLog("Downloading from URL: %s to %s", release.DownloadURL, dest)
 
 	req, err := http.NewRequest("GET", release.DownloadURL, nil)
@@ -212,6 +218,7 @@ func (g *GitHubRepository) convertGitHubRelease(ghRelease *githubRelease) (*Rele
 
 	// Find the asset to download
 	var downloadURL, fileName string
+	var assetID int64
 	if g.AssetName != "" {
 		g.debugLog("Looking for specific asset: %s", g.AssetName)
 		// Look for specific asset
@@ -219,7 +226,8 @@ func (g *GitHubRepository) convertGitHubRelease(ghRelease *githubRelease) (*Rele
 			if asset.Name == g.AssetName {
 				downloadURL = asset.BrowserDownloadURL
 				fileName = asset.Name
-				g.debugLog("Found matching asset: %s", fileName)
+				assetID = asset.ID
+				g.debugLog("Found matching asset: %s (ID: %d)", fileName, assetID)
 				break
 			}
 		}
@@ -230,7 +238,14 @@ func (g *GitHubRepository) convertGitHubRelease(ghRelease *githubRelease) (*Rele
 		// Use the first asset
 		downloadURL = ghRelease.Assets[0].BrowserDownloadURL
 		fileName = ghRelease.Assets[0].Name
-		g.debugLog("Using first asset: %s", fileName)
+		assetID = ghRelease.Assets[0].ID
+		g.debugLog("Using first asset: %s (ID: %d)", fileName, assetID)
+	}
+
+	// If we have a token, use the GitHub Asset API URL instead
+	if g.Token != "" && assetID != 0 {
+		downloadURL = fmt.Sprintf("https://api.github.com/repos/%s/%s/releases/assets/%d", g.Owner, g.Repo, assetID)
+		g.debugLog("Using GitHub Asset API URL: %s", downloadURL)
 	}
 
 	return &Release{
@@ -238,5 +253,6 @@ func (g *GitHubRepository) convertGitHubRelease(ghRelease *githubRelease) (*Rele
 		DownloadURL: downloadURL,
 		ReleaseDate: ghRelease.PublishedAt,
 		FileName:    fileName,
+		AssetID:     assetID,
 	}, nil
 }
