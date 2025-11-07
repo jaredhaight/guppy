@@ -230,7 +230,7 @@ var initCmd = &cobra.Command{
 }
 
 func init() {
-	rootCmd.PersistentFlags().StringVarP(&cfgFile, "config", "c", "", "config file (default is guppy.json in executable directory, then $HOME/.config/guppy/guppy.json)")
+	rootCmd.PersistentFlags().StringVarP(&cfgFile, "config", "c", "", "config file (default is guppy.json in executable directory)")
 	rootCmd.PersistentFlags().BoolVarP(&debug, "debug", "d", false, "enable debug logging")
 
 	rootCmd.AddCommand(checkCmd)
@@ -246,7 +246,10 @@ func loadConfig() error {
 	}
 	debugLog("Loading config from: %s", cfgFile)
 	cfg, err = config.Load(cfgFile)
-	return err
+	if err != nil {
+		return fmt.Errorf("%w\n\nYou can specify a config file location using the --config flag.\nTo create a template config file, run: guppy init --config <path>", err)
+	}
+	return nil
 }
 
 func createRepository() (repository.Repository, error) {

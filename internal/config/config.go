@@ -120,26 +120,15 @@ func (c *Config) Save(configPath string) error {
 }
 
 // GetDefaultConfigPath returns the default config file path
-// It first checks for a config file in the same directory as the guppy executable,
-// then falls back to the user's home directory
+// The config file should be in the same directory as the guppy executable
 func GetDefaultConfigPath() string {
-	// Try to get the executable path
+	// Get the executable path
 	exePath, err := os.Executable()
-	if err == nil {
-		// Get the directory containing the executable
-		exeDir := filepath.Dir(exePath)
-		configPath := filepath.Join(exeDir, "guppy.json")
-
-		// Check if config exists in the executable directory
-		if _, err := os.Stat(configPath); err == nil {
-			return configPath
-		}
-	}
-
-	// Fall back to home directory
-	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return "guppy.json"
 	}
-	return filepath.Join(homeDir, ".config", "guppy", "guppy.json")
+
+	// Return path to guppy.json in the executable directory
+	exeDir := filepath.Dir(exePath)
+	return filepath.Join(exeDir, "guppy.json")
 }
