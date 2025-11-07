@@ -71,12 +71,14 @@ func (g *GitHubRepository) GetLatestRelease() (*Release, error) {
 		return nil, fmt.Errorf("error creating request: %w", err)
 	}
 
+	req.Header.Set("User-Agent", "guppy-updater")
+	req.Header.Set("Accept", "application/vnd.github.v3+json")
+
 	if g.Token != "" {
 		authValue := fmt.Sprintf("token %s", g.Token)
 		req.Header.Set("Authorization", authValue)
 		g.debugLog("Request header set: Authorization: %s", authValue)
 	}
-	req.Header.Set("Accept", "application/vnd.github.v3+json")
 
 	resp, err := g.httpClient.Do(req)
 	if err != nil {
@@ -112,12 +114,14 @@ func (g *GitHubRepository) GetRelease(version string) (*Release, error) {
 		return nil, fmt.Errorf("error creating request: %w", err)
 	}
 
+	req.Header.Set("User-Agent", "guppy-updater")
+	req.Header.Set("Accept", "application/vnd.github.v3+json")
+
 	if g.Token != "" {
 		authValue := fmt.Sprintf("token %s", g.Token)
 		req.Header.Set("Authorization", authValue)
 		g.debugLog("Request header set: Authorization: %s", authValue)
 	}
-	req.Header.Set("Accept", "application/vnd.github.v3+json")
 
 	resp, err := g.httpClient.Do(req)
 	if err != nil {
@@ -155,6 +159,10 @@ func (g *GitHubRepository) Download(release *Release, dest string) error {
 	if err != nil {
 		return fmt.Errorf("error creating download request: %w", err)
 	}
+
+	// Set required headers for GitHub asset downloads
+	req.Header.Set("User-Agent", "guppy-updater")
+	req.Header.Set("Accept", "application/octet-stream")
 
 	if g.Token != "" {
 		authValue := fmt.Sprintf("token %s", g.Token)
