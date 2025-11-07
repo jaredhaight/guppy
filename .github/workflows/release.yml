@@ -1,0 +1,117 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          # Linux builds
+          - goos: linux
+            goarch: amd64
+            output: guppy-linux-amd64
+          - goos: linux
+            goarch: arm64
+            output: guppy-linux-arm64
+
+          # macOS builds
+          - goos: darwin
+            goarch: amd64
+            output: guppy-darwin-amd64
+          - goos: darwin
+            goarch: arm64
+            output: guppy-darwin-arm64
+
+          # Windows builds
+          - goos: windows
+            goarch: amd64
+            output: guppy-windows-amd64.exe
+          - goos: windows
+            goarch: arm64
+            output: guppy-windows-arm64.exe
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+
+      - name: Get version
+        id: get_version
+        run: |
+          DATE=$(date +%Y.%m%d)
+          echo "VERSION=v${DATE}.${GITHUB_RUN_NUMBER}" >> $GITHUB_OUTPUT
+
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+        run: |
+          go build \
+            -ldflags "-s -w -X main.Version=${{ steps.get_version.outputs.VERSION }}" \
+            -o ${{ matrix.output }} \
+            ./cmd/guppy
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.output }}
+          path: ${{ matrix.output }}
+          retention-days: 1
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Prepare release assets
+        run: |
+          mkdir -p release
+          find artifacts -type f -exec cp {} release/ \;
+          ls -lh release/
+
+      - name: Get version
+        id: get_version
+        run: |
+          DATE=$(date +%Y.%m%d)
+          echo "VERSION=v${DATE}.${GITHUB_RUN_NUMBER}" >> $GITHUB_OUTPUT
+
+      - name: Generate checksums
+        run: |
+          cd release
+          sha256sum * > checksums.txt
+          cat checksums.txt
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.get_version.outputs.VERSION }}
+          name: Release ${{ steps.get_version.outputs.VERSION }}
+          files: release/*
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
