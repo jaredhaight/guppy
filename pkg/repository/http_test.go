@@ -157,7 +157,9 @@ func TestGetLatestRelease(t *testing.T) {
 			// Create a test server
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
-				json.NewEncoder(w).Encode(tt.releases)
+				if err := json.NewEncoder(w).Encode(tt.releases); err != nil {
+					t.Errorf("failed to encode response: %v", err)
+				}
 			}))
 			defer server.Close()
 
@@ -226,7 +228,9 @@ func TestGetRelease(t *testing.T) {
 			// Create a test server
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
-				json.NewEncoder(w).Encode(releases)
+				if err := json.NewEncoder(w).Encode(releases); err != nil {
+					t.Errorf("failed to encode response: %v", err)
+				}
 			}))
 			defer server.Close()
 
@@ -415,7 +419,9 @@ func TestDownload(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Create a test server
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				w.Write(tt.fileContent)
+				if _, err := w.Write(tt.fileContent); err != nil {
+					t.Errorf("failed to write response: %v", err)
+				}
 			}))
 			defer server.Close()
 

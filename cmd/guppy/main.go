@@ -15,10 +15,10 @@ import (
 )
 
 var (
-	Version   = "dev"
-	cfgFile   string
-	cfg       *config.Config
-	debug     bool
+	Version = "dev"
+	cfgFile string
+	cfg     *config.Config
+	debug   bool
 )
 
 func main() {
@@ -36,10 +36,10 @@ func debugLog(format string, args ...interface{}) {
 }
 
 var rootCmd = &cobra.Command{
-	Use:          "guppy",
-	Short:        "Guppy is a software update helper",
-	Long:         `Guppy checks for new releases, downloads them, and applies the new version.`,
-	SilenceUsage: true,
+	Use:           "guppy",
+	Short:         "Guppy is a software update helper",
+	Long:          `Guppy checks for new releases, downloads them, and applies the new version.`,
+	SilenceUsage:  true,
 	SilenceErrors: true,
 }
 
@@ -179,7 +179,9 @@ var versionCmd = &cobra.Command{
 	Use:   "version",
 	Short: "Show guppy version",
 	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Printf("guppy version %s\n", Version)
+		fmt.Printf("Guppy Software Updater\n")
+		fmt.Print("https://www.github.com/jaredhaight/guppy\n")
+		fmt.Printf("Version: %s\n", Version)
 	},
 }
 
