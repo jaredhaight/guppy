@@ -34,9 +34,11 @@ func debugLog(format string, args ...interface{}) {
 }
 
 var rootCmd = &cobra.Command{
-	Use:   "guppy",
-	Short: "Guppy is a software update helper",
-	Long:  `Guppy checks for new releases, downloads them, and applies the new version.`,
+	Use:          "guppy",
+	Short:        "Guppy is a software update helper",
+	Long:         `Guppy checks for new releases, downloads them, and applies the new version.`,
+	SilenceUsage: true,
+	SilenceErrors: true,
 }
 
 var checkCmd = &cobra.Command{
