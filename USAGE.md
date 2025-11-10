@@ -84,6 +84,36 @@ guppy check --debug
 guppy update -d
 ```
 
+### --interval, -i
+Run the update command continuously at the specified interval. Only available for the `update` command.
+
+Supported interval formats:
+- Duration format: `15m`, `1h`, `30s`, `1d` (can be combined like `1h30m`)
+- HH:MM:SS format: `01:30:00`, `00:15:00`
+
+```bash
+# Check for updates every 15 minutes
+guppy update --interval 15m
+
+# Check for updates every hour
+guppy update --interval 1h
+
+# Check for updates once per day
+guppy update --interval 1d
+
+# Check for updates every 1 hour 30 minutes using HH:MM:SS format
+guppy update --interval 01:30:00
+```
+
+When running with `--interval`, guppy will:
+- Run an initial update check immediately
+- Continue checking at the specified interval indefinitely
+- Log errors but continue running on failures
+- Apply updates automatically when found and continue monitoring
+- Gracefully shutdown when receiving SIGINT (Ctrl+C) or SIGTERM
+
+This is useful for long-running applications that need automatic updates, or for running guppy as a background service.
+
 ## Commands
 
 ### guppy check
@@ -276,6 +306,62 @@ Update from a custom web server using the HTTP repository type.
 - Each release must have a `version` and `url` field
 - Checksums are optional but recommended. Supported algorithms: `sha256`, `sha1`, `md5`
 - If multiple checksums are provided, guppy uses the highest security algorithm (SHA256 > SHA1 > MD5)
+
+### Example 5: Continuous Monitoring with Intervals
+
+Keep an application automatically updated by checking for new releases at regular intervals.
+
+**Config file:**
+```json
+{
+  "repository": {
+    "type": "github",
+    "owner": "user",
+    "repo": "myapp",
+    "asset_name": "myapp-linux-amd64"
+  },
+  "current_version": "1.0.0",
+  "target_path": "/usr/local/bin/myapp",
+  "applier": "binary"
+}
+```
+
+**Usage:**
+```bash
+# Check for updates every 6 hours
+guppy update --interval 6h
+
+# Check for updates every day at the interval
+guppy update --interval 1d
+
+# Check for updates every 30 minutes
+guppy update --interval 30m
+```
+
+**Example output:**
+```
+Starting update monitoring (checking every 6h0m0s). Press Ctrl+C to stop.
+Checking for updates...
+✓ Already up to date!
+
+[2025-11-10 18:00:00] Running scheduled update check...
+Checking for updates...
+Downloading version v2.0.0...
+Downloaded to: /tmp/guppy/myapp-linux-amd64
+Verifying checksum...
+✓ Checksum verified
+Applying update to /usr/local/bin/myapp...
+✓ Update applied successfully!
+
+[2025-11-11 00:00:00] Running scheduled update check...
+Checking for updates...
+✓ Already up to date!
+```
+
+This is particularly useful for:
+- Running guppy as a systemd service or daemon
+- Keeping deployed applications automatically updated
+- Development/staging environments that should always run the latest version
 
 ## Checksum Verification
 

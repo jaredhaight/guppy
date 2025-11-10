@@ -4,10 +4,14 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/jaredhaight/guppy/internal/config"
+	"github.com/jaredhaight/guppy/internal/util"
 	"github.com/jaredhaight/guppy/pkg/applier"
 	"github.com/jaredhaight/guppy/pkg/checksum"
 	"github.com/jaredhaight/guppy/pkg/repository"
@@ -15,10 +19,11 @@ import (
 )
 
 var (
-	Version = "dev"
-	cfgFile string
-	cfg     *config.Config
-	debug   bool
+	Version      = "dev"
+	cfgFile      string
+	cfg          *config.Config
+	debug        bool
+	intervalFlag string
 )
 
 func main() {
@@ -100,78 +105,47 @@ var updateCmd = &cobra.Command{
 			return err
 		}
 
-		fmt.Println("Checking for updates...")
-		latest, err := repo.GetLatestRelease()
+		// If no interval flag is set, run once (original behavior)
+		if intervalFlag == "" {
+			return performUpdate(repo)
+		}
+
+		// Parse the interval
+		interval, err := util.ParseInterval(intervalFlag)
 		if err != nil {
-			return fmt.Errorf("error getting latest release: %w", err)
+			return fmt.Errorf("invalid interval: %w", err)
 		}
 
-		if cfg.CurrentVersion != "" {
-			isNewer, err := repo.CompareVersions(cfg.CurrentVersion, latest.Version)
-			if err != nil {
-				return fmt.Errorf("error comparing versions: %w", err)
-			}
+		// Set up signal handling for graceful shutdown
+		sigChan := make(chan os.Signal, 1)
+		signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
-			if !isNewer {
-				fmt.Println("✓ Already up to date!")
+		// Create ticker for the interval
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+
+		fmt.Printf("Starting update monitoring (checking every %s). Press Ctrl+C to stop.\n", interval)
+
+		// Run the first check immediately
+		if err := performUpdate(repo); err != nil {
+			fmt.Printf("Error during update check: %v\n", err)
+			fmt.Println("Will retry at next interval...")
+		}
+
+		// Main loop
+		for {
+			select {
+			case <-sigChan:
+				fmt.Println("\nReceived shutdown signal, stopping...")
 				return nil
+			case <-ticker.C:
+				fmt.Printf("\n[%s] Running scheduled update check...\n", time.Now().Format("2006-01-02 15:04:05"))
+				if err := performUpdate(repo); err != nil {
+					fmt.Printf("Error during update check: %v\n", err)
+					fmt.Println("Will retry at next interval...")
+				}
 			}
 		}
-
-		fmt.Printf("Downloading version %s...\n", latest.Version)
-
-		// Create download directory
-		if err := os.MkdirAll(cfg.DownloadDir, 0755); err != nil {
-			return fmt.Errorf("error creating download directory: %w", err)
-		}
-
-		downloadPath := filepath.Join(cfg.DownloadDir, latest.FileName)
-		debugLog("Computed download path: %s", downloadPath)
-		if err := repo.Download(latest, downloadPath); err != nil {
-			return fmt.Errorf("error downloading release: %w", err)
-		}
-
-		fmt.Printf("Downloaded to: %s\n", downloadPath)
-
-		// Verify checksum if provided
-		if latest.Checksum != "" {
-			fmt.Println("Verifying checksum...")
-			valid, err := checksum.VerifySHA256(downloadPath, latest.Checksum)
-			if err != nil {
-				return fmt.Errorf("error verifying checksum: %w", err)
-			}
-			if !valid {
-				return fmt.Errorf("checksum verification failed - file may be corrupted")
-			}
-			fmt.Println("✓ Checksum verified")
-		}
-
-		// Apply the update
-		fmt.Printf("Applying update to %s...\n", cfg.TargetPath)
-
-		var app applier.Applier
-		switch cfg.Applier {
-		case "binary":
-			app = applier.NewBinaryApplier()
-		case "archive":
-			app = applier.NewArchiveApplier()
-		default:
-			return fmt.Errorf("unknown applier type: %s", cfg.Applier)
-		}
-
-		if err := app.Apply(downloadPath, cfg.TargetPath); err != nil {
-			return fmt.Errorf("error applying update: %w", err)
-		}
-
-		fmt.Println("✓ Update applied successfully!")
-
-		// Update current version in config
-		cfg.CurrentVersion = latest.Version
-		if err := cfg.Save(cfgFile); err != nil {
-			fmt.Printf("Warning: Could not save updated version to config: %v\n", err)
-		}
-
-		return nil
 	},
 }
 
@@ -308,6 +282,9 @@ func init() {
 	rootCmd.PersistentFlags().StringVarP(&cfgFile, "config", "c", "", "config file (default is guppy.json in executable directory)")
 	rootCmd.PersistentFlags().BoolVarP(&debug, "debug", "d", false, "enable debug logging")
 
+	// Add interval flag to updateCmd only
+	updateCmd.Flags().StringVarP(&intervalFlag, "interval", "i", "", "check for updates at regular intervals (e.g., 15m, 1h, 1d, or HH:MM:SS)")
+
 	rootCmd.AddCommand(checkCmd)
 	rootCmd.AddCommand(updateCmd)
 	rootCmd.AddCommand(versionCmd)
@@ -347,4 +324,80 @@ func createRepository() (repository.Repository, error) {
 	default:
 		return nil, fmt.Errorf("unsupported repository type: %s", cfg.Repository.Type)
 	}
+}
+
+// performUpdate checks for and applies updates. Returns true if an update was applied, false otherwise.
+func performUpdate(repo repository.Repository) error {
+	fmt.Println("Checking for updates...")
+	latest, err := repo.GetLatestRelease()
+	if err != nil {
+		return fmt.Errorf("error getting latest release: %w", err)
+	}
+
+	if cfg.CurrentVersion != "" {
+		isNewer, err := repo.CompareVersions(cfg.CurrentVersion, latest.Version)
+		if err != nil {
+			return fmt.Errorf("error comparing versions: %w", err)
+		}
+
+		if !isNewer {
+			fmt.Println("✓ Already up to date!")
+			return nil
+		}
+	}
+
+	fmt.Printf("Downloading version %s...\n", latest.Version)
+
+	// Create download directory
+	if err := os.MkdirAll(cfg.DownloadDir, 0755); err != nil {
+		return fmt.Errorf("error creating download directory: %w", err)
+	}
+
+	downloadPath := filepath.Join(cfg.DownloadDir, latest.FileName)
+	debugLog("Computed download path: %s", downloadPath)
+	if err := repo.Download(latest, downloadPath); err != nil {
+		return fmt.Errorf("error downloading release: %w", err)
+	}
+
+	fmt.Printf("Downloaded to: %s\n", downloadPath)
+
+	// Verify checksum if provided
+	if latest.Checksum != "" {
+		fmt.Println("Verifying checksum...")
+		valid, err := checksum.VerifySHA256(downloadPath, latest.Checksum)
+		if err != nil {
+			return fmt.Errorf("error verifying checksum: %w", err)
+		}
+		if !valid {
+			return fmt.Errorf("checksum verification failed - file may be corrupted")
+		}
+		fmt.Println("✓ Checksum verified")
+	}
+
+	// Apply the update
+	fmt.Printf("Applying update to %s...\n", cfg.TargetPath)
+
+	var app applier.Applier
+	switch cfg.Applier {
+	case "binary":
+		app = applier.NewBinaryApplier()
+	case "archive":
+		app = applier.NewArchiveApplier()
+	default:
+		return fmt.Errorf("unknown applier type: %s", cfg.Applier)
+	}
+
+	if err := app.Apply(downloadPath, cfg.TargetPath); err != nil {
+		return fmt.Errorf("error applying update: %w", err)
+	}
+
+	fmt.Println("✓ Update applied successfully!")
+
+	// Update current version in config
+	cfg.CurrentVersion = latest.Version
+	if err := cfg.Save(cfgFile); err != nil {
+		fmt.Printf("Warning: Could not save updated version to config: %v\n", err)
+	}
+
+	return nil
 }
