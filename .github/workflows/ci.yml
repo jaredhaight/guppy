@@ -34,7 +34,24 @@ jobs:
         run: go test -v -race -coverprofile=coverage.out ./...
 
       - name: Check test coverage
-        run: go tool cover -func=coverage.out
+        run: |
+          echo "Generating coverage report..."
+          go tool cover -func=coverage.out
+
+          # Extract total coverage percentage
+          COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print $3}' | sed 's/%//')
+          echo "Total coverage: ${COVERAGE}%"
+
+          # Set minimum coverage threshold
+          THRESHOLD=70.0
+
+          # Compare coverage to threshold
+          if (( $(echo "$COVERAGE < $THRESHOLD" | bc -l) )); then
+            echo "ERROR: Test coverage ${COVERAGE}% is below the minimum threshold of ${THRESHOLD}%"
+            exit 1
+          else
+            echo "SUCCESS: Test coverage ${COVERAGE}% meets the minimum threshold of ${THRESHOLD}%"
+          fi
 
   build:
     name: Build
