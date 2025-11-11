@@ -46,11 +46,6 @@ var rootCmd = &cobra.Command{
 	Long:          `Guppy checks for new releases, downloads them, and applies the new version.`,
 	SilenceUsage:  true,
 	SilenceErrors: true,
-}
-
-var checkCmd = &cobra.Command{
-	Use:   "check",
-	Short: "Check for available updates",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if err := loadConfig(); err != nil {
 			return err
@@ -61,51 +56,7 @@ var checkCmd = &cobra.Command{
 			return err
 		}
 
-		fmt.Println("Checking for updates...")
-		latest, err := repo.GetLatestRelease()
-		if err != nil {
-			return fmt.Errorf("error getting latest release: %w", err)
-		}
-
-		fmt.Printf("Latest version: %s\n", latest.Version)
-
-		if cfg.CurrentVersion == "" {
-			fmt.Println("No current version set in config")
-			return nil
-		}
-
-		fmt.Printf("Current version: %s\n", cfg.CurrentVersion)
-
-		isNewer, err := repo.CompareVersions(cfg.CurrentVersion, latest.Version)
-		if err != nil {
-			return fmt.Errorf("error comparing versions: %w", err)
-		}
-
-		if isNewer {
-			fmt.Printf("🎉 New version available: %s\n", latest.Version)
-			fmt.Printf("Download URL: %s\n", latest.DownloadURL)
-		} else {
-			fmt.Println("✓ You are up to date!")
-		}
-
-		return nil
-	},
-}
-
-var updateCmd = &cobra.Command{
-	Use:   "update",
-	Short: "Download and apply updates",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		if err := loadConfig(); err != nil {
-			return err
-		}
-
-		repo, err := createRepository()
-		if err != nil {
-			return err
-		}
-
-		// If no interval flag is set, run once (original behavior)
+		// If no interval flag is set, run once
 		if intervalFlag == "" {
 			return performUpdate(repo)
 		}
@@ -146,6 +97,23 @@ var updateCmd = &cobra.Command{
 				}
 			}
 		}
+	},
+}
+
+var checkCmd = &cobra.Command{
+	Use:   "check",
+	Short: "Check for available updates",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if err := loadConfig(); err != nil {
+			return err
+		}
+
+		repo, err := createRepository()
+		if err != nil {
+			return err
+		}
+
+		return checkForUpdates(repo)
 	},
 }
 
@@ -281,12 +249,9 @@ var initCmd = &cobra.Command{
 func init() {
 	rootCmd.PersistentFlags().StringVarP(&cfgFile, "config", "c", "", "config file (default is guppy.json in executable directory)")
 	rootCmd.PersistentFlags().BoolVarP(&debug, "debug", "d", false, "enable debug logging")
-
-	// Add interval flag to updateCmd only
-	updateCmd.Flags().StringVarP(&intervalFlag, "interval", "i", "", "check for updates at regular intervals (e.g., 15m, 1h, 1d, or HH:MM:SS)")
+	rootCmd.Flags().StringVarP(&intervalFlag, "interval", "i", "", "check for updates at regular intervals (e.g., 15m, 1h, 1d, or HH:MM:SS)")
 
 	rootCmd.AddCommand(checkCmd)
-	rootCmd.AddCommand(updateCmd)
 	rootCmd.AddCommand(versionCmd)
 	rootCmd.AddCommand(initCmd)
 }
@@ -324,6 +289,38 @@ func createRepository() (repository.Repository, error) {
 	default:
 		return nil, fmt.Errorf("unsupported repository type: %s", cfg.Repository.Type)
 	}
+}
+
+// checkForUpdates checks if a new version is available and prints the result
+func checkForUpdates(repo repository.Repository) error {
+	fmt.Println("Checking for updates...")
+	latest, err := repo.GetLatestRelease()
+	if err != nil {
+		return fmt.Errorf("error getting latest release: %w", err)
+	}
+
+	fmt.Printf("Latest version: %s\n", latest.Version)
+
+	if cfg.CurrentVersion == "" {
+		fmt.Println("No current version set in config")
+		return nil
+	}
+
+	fmt.Printf("Current version: %s\n", cfg.CurrentVersion)
+
+	isNewer, err := repo.CompareVersions(cfg.CurrentVersion, latest.Version)
+	if err != nil {
+		return fmt.Errorf("error comparing versions: %w", err)
+	}
+
+	if isNewer {
+		fmt.Printf("🎉 New version available: %s\n", latest.Version)
+		fmt.Printf("Download URL: %s\n", latest.DownloadURL)
+	} else {
+		fmt.Println("✓ You are up to date!")
+	}
+
+	return nil
 }
 
 // performUpdate checks for and applies updates. Returns true if an update was applied, false otherwise.
