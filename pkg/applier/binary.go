@@ -21,7 +21,7 @@ func (b *BinaryApplier) Apply(source string, target string) error {
 	if err != nil {
 		return fmt.Errorf("error opening source file: %w", err)
 	}
-	defer sourceFile.Close()
+	defer func() { _ = sourceFile.Close() }()
 
 	// Get source file info
 	sourceInfo, err := sourceFile.Stat()
@@ -38,16 +38,16 @@ func (b *BinaryApplier) Apply(source string, target string) error {
 
 	// Copy source to temp target
 	_, err = io.Copy(targetFile, sourceFile)
-	targetFile.Close()
+	_ = targetFile.Close()
 	if err != nil {
-		os.Remove(tempTarget)
+		_ = os.Remove(tempTarget)
 		return fmt.Errorf("error copying file: %w", err)
 	}
 
 	// Remove old target if it exists
 	if _, err := os.Stat(target); err == nil {
 		if err := os.Remove(target); err != nil {
-			os.Remove(tempTarget)
+			_ = os.Remove(tempTarget)
 			return fmt.Errorf("error removing old target: %w", err)
 		}
 	}

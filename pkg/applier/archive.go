@@ -47,7 +47,7 @@ func (a *ArchiveApplier) extractZip(source string, dest string) error {
 	if err != nil {
 		return fmt.Errorf("error opening zip file: %w", err)
 	}
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 
 	for _, file := range reader.File {
 		path := filepath.Join(dest, file.Name)
@@ -84,13 +84,13 @@ func (a *ArchiveApplier) extractZipFile(file *zip.File, dest string) error {
 	if err != nil {
 		return fmt.Errorf("error opening file in archive: %w", err)
 	}
-	defer rc.Close()
+	defer func() { _ = rc.Close() }()
 
 	outFile, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, file.Mode())
 	if err != nil {
 		return fmt.Errorf("error creating output file: %w", err)
 	}
-	defer outFile.Close()
+	defer func() { _ = outFile.Close() }()
 
 	_, err = io.Copy(outFile, rc)
 	if err != nil {
@@ -106,13 +106,13 @@ func (a *ArchiveApplier) extractTarGz(source string, dest string) error {
 	if err != nil {
 		return fmt.Errorf("error opening tar.gz file: %w", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	gzipReader, err := gzip.NewReader(file)
 	if err != nil {
 		return fmt.Errorf("error creating gzip reader: %w", err)
 	}
-	defer gzipReader.Close()
+	defer func() { _ = gzipReader.Close() }()
 
 	tarReader := tar.NewReader(gzipReader)
 
@@ -149,10 +149,12 @@ func (a *ArchiveApplier) extractTarGz(source string, dest string) error {
 			}
 
 			if _, err := io.Copy(outFile, tarReader); err != nil {
-				outFile.Close()
+				_ = outFile.Close()
 				return fmt.Errorf("error extracting file: %w", err)
 			}
-			outFile.Close()
+			if err := outFile.Close(); err != nil {
+				return fmt.Errorf("error closing file: %w", err)
+			}
 		default:
 			// Skip other types (symlinks, etc.)
 			continue

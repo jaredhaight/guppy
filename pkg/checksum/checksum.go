@@ -16,7 +16,7 @@ func VerifySHA256(filePath string, expectedChecksum string) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("error opening file: %w", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	// Calculate SHA256
 	hash := sha256.New()
@@ -40,7 +40,7 @@ func CalculateSHA256(filePath string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("error opening file: %w", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	hash := sha256.New()
 	if _, err := io.Copy(hash, file); err != nil {
