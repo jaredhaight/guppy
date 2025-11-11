@@ -67,7 +67,7 @@ func (h *HTTPRepository) fetchReleases() ([]httpRelease, error) {
 	if err != nil {
 		return nil, fmt.Errorf("error fetching releases: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -165,7 +165,7 @@ func (h *HTTPRepository) Download(release *Release, dest string) error {
 	if err != nil {
 		return fmt.Errorf("error downloading file: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("download failed with status %d", resp.StatusCode)
@@ -182,7 +182,7 @@ func (h *HTTPRepository) Download(release *Release, dest string) error {
 	if err != nil {
 		return fmt.Errorf("error creating destination file: %w", err)
 	}
-	defer out.Close()
+	defer func() { _ = out.Close() }()
 
 	// Copy the content
 	_, err = io.Copy(out, resp.Body)
@@ -195,7 +195,7 @@ func (h *HTTPRepository) Download(release *Release, dest string) error {
 		h.debugLog("Verifying checksum: %s", release.Checksum)
 		if err := h.verifyChecksum(dest, release.Checksum); err != nil {
 			// Remove the downloaded file if checksum verification fails
-			os.Remove(dest)
+			_ = os.Remove(dest)
 			return fmt.Errorf("checksum verification failed: %w", err)
 		}
 		h.debugLog("Checksum verification passed")
@@ -252,7 +252,7 @@ func (h *HTTPRepository) verifyChecksum(filePath, checksum string) error {
 	if err != nil {
 		return fmt.Errorf("error opening file: %w", err)
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }()
 
 	// Parse the checksum format
 	var algorithm, expectedHash string

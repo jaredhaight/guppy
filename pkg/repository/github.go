@@ -86,7 +86,7 @@ func (g *GitHubRepository) GetLatestRelease() (*Release, error) {
 	if err != nil {
 		return nil, fmt.Errorf("error fetching release: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -129,7 +129,7 @@ func (g *GitHubRepository) GetRelease(version string) (*Release, error) {
 	if err != nil {
 		return nil, fmt.Errorf("error fetching release: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
@@ -181,7 +181,7 @@ func (g *GitHubRepository) Download(release *Release, dest string) error {
 	if err != nil {
 		return fmt.Errorf("error downloading file: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("download failed with status %d", resp.StatusCode)
@@ -198,7 +198,7 @@ func (g *GitHubRepository) Download(release *Release, dest string) error {
 	if err != nil {
 		return fmt.Errorf("error creating destination file: %w", err)
 	}
-	defer out.Close()
+	defer func() { _ = out.Close() }()
 
 	// Copy the content
 	_, err = io.Copy(out, resp.Body)

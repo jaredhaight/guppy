@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -17,10 +18,10 @@ func createTestZip(t *testing.T, zipPath string, files map[string]string) {
 	if err != nil {
 		t.Fatalf("Failed to create zip file: %v", err)
 	}
-	defer zipFile.Close()
+	defer func() { _ = zipFile.Close() }()
 
 	zipWriter := zip.NewWriter(zipFile)
-	defer zipWriter.Close()
+	defer func() { _ = zipWriter.Close() }()
 
 	for name, content := range files {
 		writer, err := zipWriter.Create(name)
@@ -41,13 +42,13 @@ func createTestTarGz(t *testing.T, tarPath string, files map[string]string) {
 	if err != nil {
 		t.Fatalf("Failed to create tar.gz file: %v", err)
 	}
-	defer tarFile.Close()
+	defer func() { _ = tarFile.Close() }()
 
 	gzipWriter := gzip.NewWriter(tarFile)
-	defer gzipWriter.Close()
+	defer func() { _ = gzipWriter.Close() }()
 
 	tarWriter := tar.NewWriter(gzipWriter)
-	defer tarWriter.Close()
+	defer func() { _ = tarWriter.Close() }()
 
 	for name, content := range files {
 		header := &tar.Header{
@@ -72,10 +73,10 @@ func createTestZipWithDir(t *testing.T, zipPath string) {
 	if err != nil {
 		t.Fatalf("Failed to create zip file: %v", err)
 	}
-	defer zipFile.Close()
+	defer func() { _ = zipFile.Close() }()
 
 	zipWriter := zip.NewWriter(zipFile)
-	defer zipWriter.Close()
+	defer func() { _ = zipWriter.Close() }()
 
 	// Add a directory entry with proper permissions
 	dirHeader := &zip.FileHeader{
@@ -106,13 +107,13 @@ func createTestTarGzWithDir(t *testing.T, tarPath string) {
 	if err != nil {
 		t.Fatalf("Failed to create tar.gz file: %v", err)
 	}
-	defer tarFile.Close()
+	defer func() { _ = tarFile.Close() }()
 
 	gzipWriter := gzip.NewWriter(tarFile)
-	defer gzipWriter.Close()
+	defer func() { _ = gzipWriter.Close() }()
 
 	tarWriter := tar.NewWriter(gzipWriter)
-	defer tarWriter.Close()
+	defer func() { _ = tarWriter.Close() }()
 
 	// Add directory
 	dirHeader := &tar.Header{
@@ -142,7 +143,7 @@ func createTestTarGzWithDir(t *testing.T, tarPath string) {
 func TestNewArchiveApplier(t *testing.T) {
 	applier := NewArchiveApplier()
 	if applier == nil {
-		t.Error("NewArchiveApplier() returned nil")
+		t.Fatal("NewArchiveApplier() returned nil")
 	}
 	if applier.ExtractPath != "" {
 		t.Errorf("NewArchiveApplier() ExtractPath = %q, want empty", applier.ExtractPath)
@@ -391,13 +392,13 @@ func TestArchiveApplier_Apply_ZipSlipProtection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create zip: %v", err)
 	}
-	defer zipFile.Close()
+	defer func() { _ = zipFile.Close() }()
 
 	zipWriter := zip.NewWriter(zipFile)
 	// Try to write outside the extraction directory
 	writer, _ := zipWriter.Create("../../../etc/passwd")
-	writer.Write([]byte("malicious content"))
-	zipWriter.Close()
+	_, _ = writer.Write([]byte("malicious content"))
+	_ = zipWriter.Close()
 
 	extractDir := filepath.Join(tempDir, "extract")
 	if err := os.Mkdir(extractDir, 0755); err != nil {
@@ -427,7 +428,7 @@ func TestArchiveApplier_Apply_TarGzPathTraversalProtection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create tar.gz: %v", err)
 	}
-	defer tarFile.Close()
+	defer func() { _ = tarFile.Close() }()
 
 	gzipWriter := gzip.NewWriter(tarFile)
 	tarWriter := tar.NewWriter(gzipWriter)
@@ -438,10 +439,10 @@ func TestArchiveApplier_Apply_TarGzPathTraversalProtection(t *testing.T) {
 		Mode: 0644,
 		Size: int64(len(content)),
 	}
-	tarWriter.WriteHeader(header)
-	tarWriter.Write([]byte(content))
-	tarWriter.Close()
-	gzipWriter.Close()
+	_ = tarWriter.WriteHeader(header)
+	_, _ = tarWriter.Write([]byte(content))
+	_ = tarWriter.Close()
+	_ = gzipWriter.Close()
 
 	extractDir := filepath.Join(tempDir, "extract")
 	if err := os.Mkdir(extractDir, 0755); err != nil {
@@ -527,8 +528,8 @@ func TestArchiveApplier_Apply_EmptyZip(t *testing.T) {
 		t.Fatalf("Failed to create empty zip: %v", err)
 	}
 	zipWriter := zip.NewWriter(zipFile)
-	zipWriter.Close()
-	zipFile.Close()
+	_ = zipWriter.Close()
+	_ = zipFile.Close()
 
 	extractDir := filepath.Join(tempDir, "extract")
 	if err := os.Mkdir(extractDir, 0755); err != nil {
@@ -553,12 +554,12 @@ func TestArchiveApplier_Apply_NestedDirectories(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create zip: %v", err)
 	}
-	defer zipFile.Close()
+	defer func() { _ = zipFile.Close() }()
 
 	zipWriter := zip.NewWriter(zipFile)
 	writer, _ := zipWriter.Create("level1/level2/level3/file.txt")
-	writer.Write([]byte("deeply nested file"))
-	zipWriter.Close()
+	_, _ = writer.Write([]byte("deeply nested file"))
+	_ = zipWriter.Close()
 
 	extractDir := filepath.Join(tempDir, "extract")
 	if err := os.Mkdir(extractDir, 0755); err != nil {
@@ -591,7 +592,7 @@ func TestArchiveApplier_ExtractZipFile_Permissions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create zip: %v", err)
 	}
-	defer zipFile.Close()
+	defer func() { _ = zipFile.Close() }()
 
 	zipWriter := zip.NewWriter(zipFile)
 	header := &zip.FileHeader{
@@ -600,8 +601,8 @@ func TestArchiveApplier_ExtractZipFile_Permissions(t *testing.T) {
 	}
 	header.SetMode(0755) // Executable
 	writer, _ := zipWriter.CreateHeader(header)
-	writer.Write([]byte("#!/bin/bash\necho hello"))
-	zipWriter.Close()
+	_, _ = writer.Write([]byte("#!/bin/bash\necho hello"))
+	_ = zipWriter.Close()
 
 	extractDir := filepath.Join(tempDir, "extract")
 	if err := os.Mkdir(extractDir, 0755); err != nil {
@@ -625,5 +626,197 @@ func TestArchiveApplier_ExtractZipFile_Permissions(t *testing.T) {
 	mode := info.Mode()
 	if mode&0111 == 0 {
 		t.Logf("Warning: Extracted file may not preserve executable bit: mode=%v", mode)
+	}
+}
+
+// TestArchiveApplier_SymlinkHandling tests that symlinks in TAR archives are safely skipped
+func TestArchiveApplier_SymlinkHandling_Tar(t *testing.T) {
+	tempDir := t.TempDir()
+	tarPath := filepath.Join(tempDir, "test.tar.gz")
+
+	// Create a tar.gz with a symlink
+	tarFile, err := os.Create(tarPath)
+	if err != nil {
+		t.Fatalf("Failed to create tar.gz file: %v", err)
+	}
+	defer func() { _ = tarFile.Close() }()
+
+	gzipWriter := gzip.NewWriter(tarFile)
+	defer func() { _ = gzipWriter.Close() }()
+
+	tarWriter := tar.NewWriter(gzipWriter)
+	defer func() { _ = tarWriter.Close() }()
+
+	// Add a regular file
+	header := &tar.Header{
+		Name: "regular.txt",
+		Mode: 0644,
+		Size: 7,
+	}
+	if err := tarWriter.WriteHeader(header); err != nil {
+		t.Fatalf("Failed to write tar header: %v", err)
+	}
+	if _, err := tarWriter.Write([]byte("content")); err != nil {
+		t.Fatalf("Failed to write tar entry: %v", err)
+	}
+
+	// Add a symlink
+	symlinkHeader := &tar.Header{
+		Name:     "link.txt",
+		Mode:     0777,
+		Size:     0,
+		Typeflag: tar.TypeSymlink,
+		Linkname: "regular.txt",
+	}
+	if err := tarWriter.WriteHeader(symlinkHeader); err != nil {
+		t.Fatalf("Failed to write symlink header: %v", err)
+	}
+
+	// Add a potentially malicious symlink that tries to escape
+	maliciousSymlink := &tar.Header{
+		Name:     "malicious.txt",
+		Mode:     0777,
+		Size:     0,
+		Typeflag: tar.TypeSymlink,
+		Linkname: "../../../etc/passwd",
+	}
+	if err := tarWriter.WriteHeader(maliciousSymlink); err != nil {
+		t.Fatalf("Failed to write malicious symlink header: %v", err)
+	}
+
+	_ = tarWriter.Close()
+	_ = gzipWriter.Close()
+	_ = tarFile.Close()
+
+	extractDir := filepath.Join(tempDir, "extract")
+	if err := os.Mkdir(extractDir, 0755); err != nil {
+		t.Fatalf("Failed to create extract directory: %v", err)
+	}
+
+	applier := &ArchiveApplier{ExtractPath: extractDir}
+	err = applier.Apply(tarPath, filepath.Join(extractDir, "dummy"))
+	if err != nil {
+		t.Fatalf("Apply() failed: %v", err)
+	}
+
+	// Verify regular file was extracted
+	regularPath := filepath.Join(extractDir, "regular.txt")
+	if _, err := os.Stat(regularPath); err != nil {
+		t.Errorf("Regular file was not extracted: %v", err)
+	}
+
+	// Verify symlinks were NOT extracted (security feature)
+	linkPath := filepath.Join(extractDir, "link.txt")
+	if _, err := os.Lstat(linkPath); err == nil {
+		t.Error("Symlink should not have been extracted (security risk)")
+	}
+
+	maliciousPath := filepath.Join(extractDir, "malicious.txt")
+	if _, err := os.Lstat(maliciousPath); err == nil {
+		t.Error("Malicious symlink should not have been extracted (security risk)")
+	}
+}
+
+// TestArchiveApplier_SymlinkHandling_Zip tests that symlinks in ZIP archives are handled
+func TestArchiveApplier_SymlinkHandling_Zip(t *testing.T) {
+	tempDir := t.TempDir()
+	zipPath := filepath.Join(tempDir, "test.zip")
+
+	// Create a zip with a symlink (represented as a file with Unix symlink mode)
+	zipFile, err := os.Create(zipPath)
+	if err != nil {
+		t.Fatalf("Failed to create zip file: %v", err)
+	}
+	defer func() { _ = zipFile.Close() }()
+
+	zipWriter := zip.NewWriter(zipFile)
+	defer func() { _ = zipWriter.Close() }()
+
+	// Add a regular file
+	writer, err := zipWriter.Create("regular.txt")
+	if err != nil {
+		t.Fatalf("Failed to create zip entry: %v", err)
+	}
+	if _, err := writer.Write([]byte("content")); err != nil {
+		t.Fatalf("Failed to write zip entry: %v", err)
+	}
+
+	// Add a symlink entry (Unix-style)
+	// In ZIP files, symlinks are represented with mode 0120777 (os.ModeSymlink | 0777)
+	header := &zip.FileHeader{
+		Name:   "link.txt",
+		Method: zip.Deflate,
+	}
+	header.SetMode(os.ModeSymlink | 0777)
+	symlinkWriter, err := zipWriter.CreateHeader(header)
+	if err != nil {
+		t.Fatalf("Failed to create symlink entry: %v", err)
+	}
+	// The symlink target is stored as the file content
+	if _, err := symlinkWriter.Write([]byte("regular.txt")); err != nil {
+		t.Fatalf("Failed to write symlink target: %v", err)
+	}
+
+	// Add a potentially malicious symlink
+	maliciousHeader := &zip.FileHeader{
+		Name:   "malicious.txt",
+		Method: zip.Deflate,
+	}
+	maliciousHeader.SetMode(os.ModeSymlink | 0777)
+	maliciousWriter, err := zipWriter.CreateHeader(maliciousHeader)
+	if err != nil {
+		t.Fatalf("Failed to create malicious symlink entry: %v", err)
+	}
+	if _, err := maliciousWriter.Write([]byte("../../../etc/passwd")); err != nil {
+		t.Fatalf("Failed to write malicious symlink target: %v", err)
+	}
+
+	_ = zipWriter.Close()
+	_ = zipFile.Close()
+
+	extractDir := filepath.Join(tempDir, "extract")
+	if err := os.Mkdir(extractDir, 0755); err != nil {
+		t.Fatalf("Failed to create extract directory: %v", err)
+	}
+
+	applier := &ArchiveApplier{ExtractPath: extractDir}
+	err = applier.Apply(zipPath, filepath.Join(extractDir, "dummy"))
+
+	// Note: Current implementation may extract symlinks from ZIP files
+	// This test documents the current behavior
+	if err != nil {
+		// If extraction fails, that's actually safer
+		t.Logf("Extraction failed (which is safe): %v", err)
+		return
+	}
+
+	// Verify regular file was extracted
+	regularPath := filepath.Join(extractDir, "regular.txt")
+	if _, err := os.Stat(regularPath); err != nil {
+		t.Errorf("Regular file was not extracted: %v", err)
+	}
+
+	// Check if symlinks were extracted (documenting behavior)
+	linkPath := filepath.Join(extractDir, "link.txt")
+	linkInfo, linkErr := os.Lstat(linkPath)
+	if linkErr == nil {
+		// Symlink was extracted - check if it's actually a symlink
+		if linkInfo.Mode()&os.ModeSymlink != 0 {
+			t.Logf("Warning: ZIP extractor created a symlink (potential security concern)")
+			// Verify it doesn't escape the extract directory
+			target, err := os.Readlink(linkPath)
+			if err == nil {
+				resolvedPath := filepath.Join(extractDir, target)
+				cleanedPath := filepath.Clean(resolvedPath)
+				if !filepath.IsAbs(target) {
+					// Relative symlink - check it stays within extract dir
+					if !strings.HasPrefix(cleanedPath, filepath.Clean(extractDir)) {
+						t.Errorf("Symlink escapes extraction directory: %s -> %s", linkPath, target)
+					}
+				} else {
+					t.Errorf("Absolute symlink created (security risk): %s -> %s", linkPath, target)
+				}
+			}
+		}
 	}
 }

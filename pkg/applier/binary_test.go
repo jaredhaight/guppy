@@ -340,3 +340,112 @@ func TestBinaryApplier_Apply_CleanupOnCopyFailure(t *testing.T) {
 		t.Errorf("Apply() did not clean up temp file")
 	}
 }
+
+func TestBinaryApplier_Apply_PermissionError_ReadOnly(t *testing.T) {
+	// Skip on Windows where permission handling is different
+	if os.Getenv("GOOS") == "windows" {
+		t.Skip("Skipping permission test on Windows")
+	}
+
+	tempDir := t.TempDir()
+
+	// Create source file
+	sourceFile := filepath.Join(tempDir, "source.bin")
+	if err := os.WriteFile(sourceFile, []byte("new content"), 0755); err != nil {
+		t.Fatalf("Failed to create source file: %v", err)
+	}
+
+	// Create a read-only directory for the target
+	readOnlyDir := filepath.Join(tempDir, "readonly")
+	if err := os.Mkdir(readOnlyDir, 0755); err != nil {
+		t.Fatalf("Failed to create readonly directory: %v", err)
+	}
+
+	// Create target file in read-only directory
+	targetFile := filepath.Join(readOnlyDir, "target.bin")
+	if err := os.WriteFile(targetFile, []byte("old content"), 0644); err != nil {
+		t.Fatalf("Failed to create target file: %v", err)
+	}
+
+	// Make directory read-only (no write permission)
+	if err := os.Chmod(readOnlyDir, 0555); err != nil {
+		t.Fatalf("Failed to chmod directory: %v", err)
+	}
+	// Restore permissions after test
+	defer os.Chmod(readOnlyDir, 0755)
+
+	applier := NewBinaryApplier()
+	err := applier.Apply(sourceFile, targetFile)
+
+	if err == nil {
+		t.Error("Apply() should have failed with permission error")
+	}
+
+	// Verify original file is unchanged
+	content, readErr := os.ReadFile(targetFile)
+	if readErr == nil && string(content) != "old content" {
+		t.Errorf("Original file was modified despite permission error")
+	}
+}
+
+func TestBinaryApplier_Apply_PermissionError_TargetDirectory(t *testing.T) {
+	tempDir := t.TempDir()
+
+	// Create source file
+	sourceFile := filepath.Join(tempDir, "source.bin")
+	if err := os.WriteFile(sourceFile, []byte("new content"), 0755); err != nil {
+		t.Fatalf("Failed to create source file: %v", err)
+	}
+
+	// Try to write to a non-existent directory
+	targetFile := filepath.Join(tempDir, "nonexistent", "subdir", "target.bin")
+
+	applier := NewBinaryApplier()
+	err := applier.Apply(sourceFile, targetFile)
+
+	// Should fail because parent directories don't exist
+	if err == nil {
+		t.Error("Apply() should have failed when target directory doesn't exist")
+	}
+
+	// Verify target was not created
+	if _, err := os.Stat(targetFile); !os.IsNotExist(err) {
+		t.Error("Target file should not exist after failed Apply()")
+	}
+}
+
+func TestBinaryApplier_Apply_PermissionError_SourceUnreadable(t *testing.T) {
+	// Skip on Windows where permission handling is different
+	if os.Getenv("GOOS") == "windows" {
+		t.Skip("Skipping permission test on Windows")
+	}
+
+	tempDir := t.TempDir()
+
+	// Create source file
+	sourceFile := filepath.Join(tempDir, "source.bin")
+	if err := os.WriteFile(sourceFile, []byte("content"), 0755); err != nil {
+		t.Fatalf("Failed to create source file: %v", err)
+	}
+
+	// Make source file unreadable
+	if err := os.Chmod(sourceFile, 0000); err != nil {
+		t.Fatalf("Failed to chmod source file: %v", err)
+	}
+	// Restore permissions after test
+	defer os.Chmod(sourceFile, 0755)
+
+	targetFile := filepath.Join(tempDir, "target.bin")
+
+	applier := NewBinaryApplier()
+	err := applier.Apply(sourceFile, targetFile)
+
+	if err == nil {
+		t.Error("Apply() should have failed when source file is unreadable")
+	}
+
+	// Verify target was not created
+	if _, err := os.Stat(targetFile); !os.IsNotExist(err) {
+		t.Error("Target file should not exist after failed Apply()")
+	}
+}

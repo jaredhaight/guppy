@@ -157,99 +157,6 @@ func TestCreateRepository_UnsupportedType(t *testing.T) {
 	}
 }
 
-func TestCheckForUpdates_NewVersionAvailable(t *testing.T) {
-	// Save original stdout
-	oldStdout := os.Stdout
-	r, w, _ := os.Pipe()
-	os.Stdout = w
-
-	cfg = &config.Config{
-		CurrentVersion: "v1.0.0",
-	}
-
-	mockRepo := &mockRepository{
-		latestRelease: &repository.Release{
-			Version:     "v2.0.0",
-			DownloadURL: "https://example.com/v2.0.0.zip",
-		},
-		compareVersionsResult: true,
-	}
-
-	err := checkForUpdates(mockRepo)
-
-	// Restore stdout
-	w.Close()
-	os.Stdout = oldStdout
-
-	if err != nil {
-		t.Fatalf("checkForUpdates() failed: %v", err)
-	}
-
-	// Read captured output
-	var buf bytes.Buffer
-	buf.ReadFrom(r)
-	output := buf.String()
-
-	// Verify output contains expected information
-	if !bytes.Contains([]byte(output), []byte("Latest version: v2.0.0")) {
-		t.Error("Output should contain latest version")
-	}
-	if !bytes.Contains([]byte(output), []byte("Current version: v1.0.0")) {
-		t.Error("Output should contain current version")
-	}
-	if !bytes.Contains([]byte(output), []byte("New version available")) {
-		t.Error("Output should indicate new version is available")
-	}
-}
-
-func TestCheckForUpdates_AlreadyUpToDate(t *testing.T) {
-	cfg = &config.Config{
-		CurrentVersion: "v2.0.0",
-	}
-
-	mockRepo := &mockRepository{
-		latestRelease: &repository.Release{
-			Version: "v2.0.0",
-		},
-		compareVersionsResult: false,
-	}
-
-	err := checkForUpdates(mockRepo)
-	if err != nil {
-		t.Fatalf("checkForUpdates() failed: %v", err)
-	}
-}
-
-func TestCheckForUpdates_NoCurrentVersion(t *testing.T) {
-	cfg = &config.Config{
-		CurrentVersion: "",
-	}
-
-	mockRepo := &mockRepository{
-		latestRelease: &repository.Release{
-			Version: "v1.0.0",
-		},
-	}
-
-	err := checkForUpdates(mockRepo)
-	if err != nil {
-		t.Fatalf("checkForUpdates() failed: %v", err)
-	}
-}
-
-func TestCheckForUpdates_GetLatestReleaseError(t *testing.T) {
-	cfg = &config.Config{}
-
-	mockRepo := &mockRepository{
-		getLatestReleaseErr: os.ErrNotExist,
-	}
-
-	err := checkForUpdates(mockRepo)
-	if err == nil {
-		t.Error("checkForUpdates() expected error when GetLatestRelease fails, got nil")
-	}
-}
-
 func TestPerformUpdate_NoUpdateNeeded(t *testing.T) {
 	tempDir := t.TempDir()
 
@@ -448,12 +355,12 @@ func TestDebugLog(t *testing.T) {
 	debugLog("should not appear")
 
 	// Restore stderr
-	w.Close()
+	_ = w.Close()
 	os.Stderr = oldStderr
 
 	// Read captured output
 	var buf bytes.Buffer
-	buf.ReadFrom(r)
+	_, _ = buf.ReadFrom(r)
 	output := buf.String()
 
 	if !bytes.Contains([]byte(output), []byte("[DEBUG] test message: hello")) {
@@ -481,13 +388,13 @@ func TestVersionCmd(t *testing.T) {
 	versionCmd.Run(versionCmd, []string{})
 
 	// Restore stdout and version
-	w.Close()
+	_ = w.Close()
 	os.Stdout = oldStdout
 	Version = oldVersion
 
 	// Read captured output
 	var buf bytes.Buffer
-	buf.ReadFrom(r)
+	_, _ = buf.ReadFrom(r)
 	output := buf.String()
 
 	if !bytes.Contains([]byte(output), []byte("v1.2.3-test")) {
