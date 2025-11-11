@@ -372,7 +372,9 @@ func TestBinaryApplier_Apply_PermissionError_ReadOnly(t *testing.T) {
 		t.Fatalf("Failed to chmod directory: %v", err)
 	}
 	// Restore permissions after test
-	defer os.Chmod(readOnlyDir, 0755)
+	defer func() {
+		_ = os.Chmod(readOnlyDir, 0755)
+	}()
 
 	applier := NewBinaryApplier()
 	err := applier.Apply(sourceFile, targetFile)
@@ -433,7 +435,9 @@ func TestBinaryApplier_Apply_PermissionError_SourceUnreadable(t *testing.T) {
 		t.Fatalf("Failed to chmod source file: %v", err)
 	}
 	// Restore permissions after test
-	defer os.Chmod(sourceFile, 0755)
+	defer func() {
+		_ = os.Chmod(sourceFile, 0755)
+	}()
 
 	targetFile := filepath.Join(tempDir, "target.bin")
 

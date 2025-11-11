@@ -389,9 +389,9 @@ func TestGitHubRepository_GetLatestRelease(t *testing.T) {
 				} else {
 					// For error responses
 					if str, ok := tt.responseBody.(string); ok {
-						w.Write([]byte(str))
+						_, _ = w.Write([]byte(str))
 					} else {
-						json.NewEncoder(w).Encode(tt.responseBody)
+						_ = json.NewEncoder(w).Encode(tt.responseBody)
 					}
 				}
 			}))
@@ -526,9 +526,9 @@ func TestGitHubRepository_GetRelease(t *testing.T) {
 				w.WriteHeader(tt.responseStatus)
 
 				if tt.responseStatus == http.StatusOK {
-					json.NewEncoder(w).Encode(tt.responseBody)
+					_ = json.NewEncoder(w).Encode(tt.responseBody)
 				} else {
-					json.NewEncoder(w).Encode(tt.responseBody)
+					_ = json.NewEncoder(w).Encode(tt.responseBody)
 				}
 			}))
 			defer server.Close()
@@ -672,7 +672,7 @@ func TestGitHubRepository_Download(t *testing.T) {
 
 				w.WriteHeader(tt.responseStatus)
 				if tt.responseStatus == http.StatusOK {
-					w.Write([]byte(tt.responseBody))
+					_, _ = w.Write([]byte(tt.responseBody))
 				}
 			}))
 			defer server.Close()
