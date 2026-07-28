@@ -12,6 +12,16 @@ cd guppy
 go build -o guppy ./cmd/guppy
 ```
 
+### Verifying a downloaded release
+
+Guppy's own releases are built by GitHub Actions and carry a signed provenance attestation, so you can confirm a binary came from this repository rather than trusting the download:
+
+```bash
+gh attestation verify guppy-linux-amd64 --repo jaredhaight/guppy
+```
+
+Guppy asks the same of the software it installs, so it's worth applying to guppy itself. The `checksums.txt` published alongside the binaries is a convenience, not evidence — it's unsigned, and anyone able to replace a binary can replace it too.
+
 Then add guppy's bin folder to your PATH:
 
 ```bash

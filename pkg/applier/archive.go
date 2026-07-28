@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"archive/zip"
 	"compress/gzip"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -35,14 +36,15 @@ func Within(dir, path string) bool {
 	return path == dir || strings.HasPrefix(path, dir+string(os.PathSeparator))
 }
 
-// safeMode reduces an archive-supplied mode to one of two values.
+// installMode is the mode an extracted file gets.
 //
-// The mode in an archive is chosen by whoever built it. Honoring it verbatim
-// lets a release ship a setuid or world-writable file — Go's zip reader maps
-// the setuid bit into fs.FileMode, and os.OpenFile passes it through to the
-// syscall. Only the executable bit is worth carrying over.
-func safeMode(mode fs.FileMode) fs.FileMode {
-	if mode.Perm()&0111 != 0 {
+// The mode inside an archive is chosen by whoever built it. Honoring it
+// verbatim lets a release ship a setuid or world-writable file — Go's zip
+// reader maps the setuid bit into fs.FileMode and os.OpenFile passes it
+// through to the syscall. Whether the file is executable is the only part
+// worth carrying over, so that is the only input.
+func installMode(executable bool) fs.FileMode {
+	if executable {
 		return 0755
 	}
 	return 0644
@@ -128,7 +130,7 @@ func (a *ArchiveApplier) extractZipFile(file *zip.File, dest string, remaining i
 	}
 	defer func() { _ = rc.Close() }()
 
-	outFile, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, safeMode(file.Mode()))
+	outFile, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, installMode(file.Mode().Perm()&0111 != 0))
 	if err != nil {
 		return 0, fmt.Errorf("error creating output file: %w", err)
 	}
@@ -161,7 +163,7 @@ func (a *ArchiveApplier) extractTarGz(source string, dest string) error {
 	var written int64
 	for {
 		header, err := tarReader.Next()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
@@ -184,7 +186,10 @@ func (a *ArchiveApplier) extractTarGz(source string, dest string) error {
 				return fmt.Errorf("error creating parent directory: %w", err)
 			}
 
-			outFile, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, safeMode(fs.FileMode(header.Mode)))
+			// header.Mode is an int64 of POSIX bits; only the executable
+			// bit is consulted, so it never needs narrowing to a FileMode.
+			outFile, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC,
+				installMode(header.Mode&0111 != 0))
 			if err != nil {
 				return fmt.Errorf("error creating file: %w", err)
 			}

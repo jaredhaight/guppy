@@ -1,0 +1,58 @@
+version: "2"
+
+# The default linter set has no security linters. For a tool that downloads
+# other people's binaries and puts them on the user's PATH, gosec is the point.
+#
+# Every exclusion below is a deliberate judgement with a reason. Anything
+# without one is a bug to fix, not a rule to add.
+linters:
+  enable:
+    - gosec
+    - bodyclose
+    - errorlint
+    - misspell
+
+  settings:
+    gosec:
+      excludes:
+        # Guppy's job is installing executables into a directory on PATH, so
+        # 0755 on the files and directories it creates is the feature. Modes
+        # that come from an archive are a different matter and are sanitized
+        # in applier.safeMode rather than trusted.
+        - G301 # directory permissions
+        - G302 # chmod permissions
+        - G306 # WriteFile permissions
+        # Every path guppy opens is one it computed: a download destination,
+        # an install directory, an archive entry. The defence is validating
+        # those paths (repository.ValidateFileName, applier.Within), which is
+        # tested directly, not refusing to open a non-constant path.
+        - G304 # file inclusion via variable
+
+  exclusions:
+    rules:
+      # MD5 and SHA-1 are part of the documented releases.json format, kept
+      # for compatibility with existing feeds. Guppy prefers SHA-256 when a
+      # feed offers a choice and warns when it has to fall back.
+      - path: pkg/checksum/checksum\.go
+        linters:
+          - gosec
+        text: "(G401|G501|G505)"
+
+      # Hook commands are shell by design — that is the feature. They come
+      # from the user's own config file, which already names a URL guppy will
+      # download and execute. Release-supplied values reach hooks as
+      # environment variables, never as command text. See internal/hook.
+      - path: internal/hook/hook\.go
+        linters:
+          - gosec
+        text: "G204"
+
+      # Test fixtures deliberately build hostile archives, URLs and paths.
+      - path: _test\.go
+        linters:
+          - gosec
+          - errcheck
+
+formatters:
+  enable:
+    - gofmt
