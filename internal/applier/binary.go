@@ -6,6 +6,25 @@ import (
 	"os"
 )
 
+// Replace deletes path, or moves it aside when it can't be deleted.
+//
+// This is what makes `guppy update guppy` work on Windows, where the running
+// executable can't be deleted but can be renamed. The leftover is cleaned up
+// by the next update. On Unix the plain remove succeeds and the fallback never
+// runs.
+func Replace(path string) error {
+	if err := os.Remove(path); err == nil || os.IsNotExist(err) {
+		return nil
+	}
+
+	aside := path + ".old"
+	_ = os.Remove(aside) // stale leftover from a previous self-update
+	if err := os.Rename(path, aside); err != nil {
+		return fmt.Errorf("error replacing %s: %w", path, err)
+	}
+	return nil
+}
+
 // BinaryApplier applies updates by replacing binary files
 type BinaryApplier struct{}
 
@@ -44,12 +63,10 @@ func (b *BinaryApplier) Apply(source string, target string) error {
 		return fmt.Errorf("error copying file: %w", err)
 	}
 
-	// Remove old target if it exists
-	if _, err := os.Stat(target); err == nil {
-		if err := os.Remove(target); err != nil {
-			_ = os.Remove(tempTarget)
-			return fmt.Errorf("error removing old target: %w", err)
-		}
+	// Clear the old target, which may be the binary running this code
+	if err := Replace(target); err != nil {
+		_ = os.Remove(tempTarget)
+		return err
 	}
 
 	// Rename temp to target

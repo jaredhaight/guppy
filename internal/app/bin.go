@@ -77,9 +77,11 @@ func LinkBin(binDir, source, name string) (string, error) {
 		return "", fmt.Errorf("error making %s executable: %w", source, err)
 	}
 
+	// Where symlinks need elevation the link is a copy of the binary, so on
+	// Windows this is the running guppy during a self-update.
 	link := filepath.Join(binDir, name)
-	if err := os.Remove(link); err != nil && !os.IsNotExist(err) {
-		return "", fmt.Errorf("error replacing %s: %w", link, err)
+	if err := applier.Replace(link); err != nil {
+		return "", err
 	}
 
 	if err := os.Symlink(source, link); err == nil {

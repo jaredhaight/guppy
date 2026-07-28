@@ -15,7 +15,13 @@ Releases must be served over `https` and carry a checksum, or guppy refuses to i
 
 # Getting started
 
-Grab a binary from the [releases page](https://github.com/jaredhaight/guppy/releases), or build from source with `go build ./cmd/guppy`. Guppy's own releases carry a signed provenance attestation — see [Installation](USAGE.md#installation) for how to check it.
+```bash
+curl -fsSL https://github.com/jaredhaight/guppy/releases/latest/download/install.sh | sh
+```
+
+On Windows, `irm https://github.com/jaredhaight/guppy/releases/latest/download/install.ps1 | iex`.
+
+The script verifies the download and then has guppy install itself, so guppy is a managed app like any other and `guppy update` keeps it current alongside everything else. You can also grab a binary from the [releases page](https://github.com/jaredhaight/guppy/releases) or build from source with `go build ./cmd/guppy`. Guppy's own releases carry a signed provenance attestation — see [Installation](USAGE.md#installation) for how to check it.
 
 Add the bin folder to your PATH:
 

@@ -4,13 +4,29 @@ Guppy manages applications published as GitHub releases. It checks for new versi
 
 ## Installation
 
-You can download the latest version of guppy from the [release page](https://github.com/jaredhaight/guppy/releases) or you can build from source:
+On Linux and macOS:
+
+```bash
+curl -fsSL https://github.com/jaredhaight/guppy/releases/latest/download/install.sh | sh
+```
+
+On Windows:
+
+```powershell
+irm https://github.com/jaredhaight/guppy/releases/latest/download/install.ps1 | iex
+```
+
+The script downloads the binary for your platform, checks it against the release's `checksums.txt`, and then has guppy install itself. That last part matters: guppy ends up as an ordinary managed app, so `guppy update guppy` — or a plain `guppy update`, which covers everything — keeps it current from then on. Re-running the script updates instead of failing.
+
+You can also download the latest version from the [release page](https://github.com/jaredhaight/guppy/releases) or build from source:
 
 ```bash
 git clone https://github.com/jaredhaight/guppy
 cd guppy
 go build -o guppy ./cmd/guppy
 ```
+
+Neither of those leaves guppy managing itself. To get that, run `guppy install jaredhaight/guppy --asset <the asset for your platform>` — which is all the install script does once it has a binary to work with.
 
 ### Verifying a downloaded release
 
@@ -20,7 +36,12 @@ Guppy's own releases are built by GitHub Actions and carry a signed provenance a
 gh attestation verify guppy-linux-amd64 --repo jaredhaight/guppy
 ```
 
-Guppy asks the same of the software it installs, so it's worth applying to guppy itself. The `checksums.txt` published alongside the binaries is a convenience, not evidence — it's unsigned, and anyone able to replace a binary can replace it too.
+Guppy asks the same of the software it installs, so it's worth applying to guppy itself. The `checksums.txt` published alongside the binaries — the thing the install script checks against — is a convenience, not evidence: it's unsigned, and anyone able to replace a binary can replace it too. The install scripts are attested the same way, so you can check one before running it:
+
+```bash
+curl -fsSLO https://github.com/jaredhaight/guppy/releases/latest/download/install.sh
+gh attestation verify install.sh --repo jaredhaight/guppy
+```
 
 Then add guppy's bin folder to your PATH:
 
@@ -30,7 +51,7 @@ export PATH="$(guppy bin):$PATH"
 
 Put that line in your shell profile (`~/.zshrc`, `~/.bashrc`) to make it permanent.
 
-Guppy can keep itself current too — see [Example 1](#example-1-a-binary-release-from-github).
+The install script prints this line for you if the folder isn't on your PATH already.
 
 ## Where guppy keeps things
 
@@ -330,18 +351,20 @@ Because these are shell commands from your own config file, treat an app config 
 
 ### Example 1: A binary release from GitHub
 
+This is what the [install script](#installation) runs, so guppy is usually already set up this way:
+
+```bash
+guppy install jaredhaight/guppy --asset guppy-linux-amd64
+```
+
+Or in two steps, if you want to look over the config before anything is downloaded:
+
 ```bash
 guppy add jaredhaight/guppy --asset guppy-linux-amd64
 ```
 
 ```bash
 guppy install guppy
-```
-
-Or in one step:
-
-```bash
-guppy install jaredhaight/guppy --asset guppy-linux-amd64
 ```
 
 ### Example 2: An archive with a nested binary
