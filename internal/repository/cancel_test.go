@@ -33,7 +33,9 @@ func TestDownloadStopsWhenContextIsCancelled(t *testing.T) {
 		cancel()
 	}()
 
-	repo := NewHTTPRepository(server.URL)
+	// Download uses the release's own URL verbatim, so the test server needs
+	// no transport substitution.
+	repo := NewGitHubRepository("owner", "repo", "")
 	dest := filepath.Join(t.TempDir(), "artifact")
 
 	done := make(chan error, 1)
@@ -58,7 +60,7 @@ func TestDownloadStopsWhenContextIsCancelled(t *testing.T) {
 	}
 }
 
-// Same for the feed request, which is the first thing every command does.
+// Same for the release lookup, which is the first thing every command does.
 func TestGetLatestReleaseStopsWhenContextIsCancelled(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		<-r.Context().Done()
@@ -68,7 +70,11 @@ func TestGetLatestReleaseStopsWhenContextIsCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // already cancelled before the call
 
-	if _, err := NewHTTPRepository(server.URL).GetLatestRelease(ctx); !errors.Is(err, context.Canceled) {
+	// The API host is hardcoded, so this one does need the transport swap.
+	repo := NewGitHubRepository("owner", "repo", "")
+	repo.httpClient = &http.Client{Transport: &mockTransport{serverURL: server.URL}}
+
+	if _, err := repo.GetLatestRelease(ctx); !errors.Is(err, context.Canceled) {
 		t.Errorf("GetLatestRelease() error = %v, want it to wrap context.Canceled", err)
 	}
 }

@@ -127,6 +127,26 @@ func TestLoadAppDefaults(t *testing.T) {
 	}
 }
 
+// A config written for the removed http provider has to fail with an
+// explanation. The url field is kept on RepositoryConfig precisely so this
+// reaches Validate instead of dying in UnmarshalExact as an unknown key.
+func TestLoadAppRejectsHTTPProviderConfig(t *testing.T) {
+	testRoot(t)
+
+	writeApp(t, "legacy.yaml", "repository:\n  type: http\n  url: https://example.com/releases.json\napplier: archive\n")
+
+	_, err := LoadApp("legacy")
+	if err == nil {
+		t.Fatal("LoadApp() accepted an http provider config, want an error")
+	}
+	if !strings.Contains(err.Error(), "GitHub") {
+		t.Errorf("error = %v, want it to explain that only GitHub is supported", err)
+	}
+	if strings.Contains(err.Error(), "invalid keys") {
+		t.Errorf("error = %v, want the explanation rather than viper's unknown-key error", err)
+	}
+}
+
 func TestLoadAppRejectsUnknownKeys(t *testing.T) {
 	testRoot(t)
 
@@ -379,10 +399,6 @@ func TestValidate(t *testing.T) {
 			app:  App{name: "a", Repository: RepositoryConfig{Type: "github", Owner: "o", Repo: "r"}, Applier: "binary"},
 		},
 		{
-			name: "valid http",
-			app:  App{name: "a", Repository: RepositoryConfig{Type: "http", URL: "https://example.com/r.json"}, Applier: "archive"},
-		},
-		{
 			name:    "github without owner",
 			app:     App{name: "a", Repository: RepositoryConfig{Type: "github", Repo: "r"}, Applier: "binary"},
 			wantErr: true,
@@ -393,27 +409,13 @@ func TestValidate(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name:    "http without url",
-			app:     App{name: "a", Repository: RepositoryConfig{Type: "http"}, Applier: "binary"},
+			name:    "the http provider is gone",
+			app:     App{name: "a", Repository: RepositoryConfig{Type: "http", URL: "https://example.com/r.json"}, Applier: "archive"},
 			wantErr: true,
 		},
 		{
-			name:    "plain http url is rejected",
-			app:     App{name: "a", Repository: RepositoryConfig{Type: "http", URL: "http://example.com/r.json"}, Applier: "archive"},
-			wantErr: true,
-		},
-		{
-			name: "plain http url is allowed with allow_unverified",
-			app: App{name: "a", Repository: RepositoryConfig{Type: "http", URL: "http://example.com/r.json"},
-				Applier: "archive", AllowUnverified: true},
-		},
-		{
-			name: "loopback http url needs no override",
-			app:  App{name: "a", Repository: RepositoryConfig{Type: "http", URL: "http://127.0.0.1:8080/r.json"}, Applier: "archive"},
-		},
-		{
-			name:    "non-http scheme is rejected",
-			app:     App{name: "a", Repository: RepositoryConfig{Type: "http", URL: "file:///etc/passwd"}, Applier: "archive"},
+			name:    "repository.url is rejected",
+			app:     App{name: "a", Repository: RepositoryConfig{Type: "github", Owner: "o", Repo: "r", URL: "https://example.com/r.json"}, Applier: "binary"},
 			wantErr: true,
 		},
 		{

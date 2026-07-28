@@ -100,19 +100,19 @@ func TestAddWithHooks(t *testing.T) {
 	}
 }
 
-func TestAddHTTP(t *testing.T) {
+func TestAddRenamesWithName(t *testing.T) {
 	testRoot(t)
 
-	if _, err := run(t, "add", "--url", "https://example.com/releases.json", "--name", "myapp"); err != nil {
+	if _, err := run(t, "add", "BurntSushi/ripgrep", "--name", "myrg"); err != nil {
 		t.Fatalf("add error: %v", err)
 	}
 
-	a, err := config.LoadApp("myapp")
+	a, err := config.LoadApp("myrg")
 	if err != nil {
 		t.Fatalf("LoadApp() error: %v", err)
 	}
-	if a.Repository.Type != "http" || a.Repository.URL != "https://example.com/releases.json" {
-		t.Errorf("repository = %+v", a.Repository)
+	if a.Repository.Owner != "BurntSushi" || a.Repository.Repo != "ripgrep" {
+		t.Errorf("repository = %+v, want the repo it was renamed from", a.Repository)
 	}
 }
 
@@ -122,11 +122,6 @@ func TestAddErrors(t *testing.T) {
 		args []string
 		want string
 	}{
-		{
-			name: "http without a name",
-			args: []string{"add", "--url", "https://example.com/r.json"},
-			want: "--name is required",
-		},
 		{
 			name: "no arguments",
 			args: []string{"add"},
@@ -143,18 +138,13 @@ func TestAddErrors(t *testing.T) {
 			want: "expected owner/repo",
 		},
 		{
-			name: "both repo and url",
-			args: []string{"add", "owner/repo", "--url", "https://example.com/r.json"},
-			want: "not both",
-		},
-		{
 			name: "name shadowing a subcommand",
 			args: []string{"add", "owner/list"},
 			want: "is a guppy command",
 		},
 		{
 			name: "name escaping the apps directory",
-			args: []string{"add", "--url", "https://example.com/r.json", "--name", "../evil"},
+			args: []string{"add", "owner/repo", "--name", "../evil"},
 			want: "invalid app name",
 		},
 		{
@@ -212,7 +202,7 @@ func TestList(t *testing.T) {
 	if _, err := run(t, "add", "BurntSushi/ripgrep"); err != nil {
 		t.Fatalf("add error: %v", err)
 	}
-	if _, err := run(t, "add", "--url", "https://example.com/r.json", "--name", "myapp"); err != nil {
+	if _, err := run(t, "add", "sharkdp/fd", "--name", "myapp"); err != nil {
 		t.Fatalf("add error: %v", err)
 	}
 
@@ -221,7 +211,7 @@ func TestList(t *testing.T) {
 		t.Fatalf("list error: %v", err)
 	}
 
-	for _, want := range []string{"ripgrep", "BurntSushi/ripgrep", "myapp", "https://example.com/r.json"} {
+	for _, want := range []string{"ripgrep", "BurntSushi/ripgrep", "myapp", "sharkdp/fd"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("list output missing %q:\n%s", want, out)
 		}

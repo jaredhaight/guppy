@@ -206,10 +206,7 @@ func (c *cli) newListCmd() *cobra.Command {
 					version = "-"
 				}
 
-				source := a.Repository.URL
-				if a.Repository.Type == "github" {
-					source = a.Repository.Owner + "/" + a.Repository.Repo
-				}
+				source := a.Repository.Owner + "/" + a.Repository.Repo
 
 				fmt.Fprintf(out, "%-24s %-14s %s\n", name, version, source)
 			}
@@ -248,36 +245,65 @@ func newVersionCmd() *cobra.Command {
 	}
 }
 
-// addFlags are the add command's own flags, scoped to it rather than shared.
+// addFlags are the flags that describe a new app. Both add and install take
+// them, so they're registered from one place rather than declared twice.
 type addFlags struct {
 	name        string
 	applier     string
 	bin         []string
 	asset       string
 	token       string
-	url         string
 	preInstall  []string
 	postInstall []string
+}
+
+// register declares the app-describing flags on cmd.
+func (f *addFlags) register(cmd *cobra.Command) {
+	cmd.Flags().StringVar(&f.name, "name", "", "name for the app (defaults to the repo name)")
+	cmd.Flags().StringVar(&f.applier, "applier", "binary", "how to install the download (binary or archive)")
+	cmd.Flags().StringArrayVar(&f.bin, "bin", nil, "binary to link into the bin directory (repeatable)")
+	cmd.Flags().StringVar(&f.asset, "asset", "", "release asset name to download")
+	cmd.Flags().StringVar(&f.token, "token", "", "GitHub token for private repos or higher rate limits")
+	cmd.Flags().StringArrayVar(&f.preInstall, "pre-install", nil, "shell command to run before installing (repeatable)")
+	cmd.Flags().StringArrayVar(&f.postInstall, "post-install", nil, "shell command to run after installing (repeatable)")
+
+	// Only errors if the flag is missing, which would be a bug on the line
+	// above rather than anything that can happen at runtime.
+	_ = cmd.RegisterFlagCompletionFunc("applier",
+		cobra.FixedCompletions([]string{"binary", "archive"}, cobra.ShellCompDirectiveNoFileComp))
+}
+
+// changed reports whether any app-describing flag was given. It asks cobra
+// rather than inspecting the values because --applier has a default, so it
+// always looks set.
+func (f *addFlags) changed(cmd *cobra.Command) bool {
+	for _, name := range []string{"name", "applier", "bin", "asset", "token", "pre-install", "post-install"} {
+		if cmd.Flags().Changed(name) {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *cli) newAddCmd() *cobra.Command {
 	f := &addFlags{}
 
 	cmd := &cobra.Command{
-		Use:   "add [owner/repo]",
-		Short: "Add an application for guppy to manage",
-		Long: `Add an application for guppy to manage.
+		Use:   "add <owner>/<repo>",
+		Short: "Add an application for guppy to manage, without installing it",
+		Long: `Add an application for guppy to manage. This writes the config and
+downloads nothing; run 'guppy install <app>' to install it.
 
-GitHub releases:
-  guppy add BurntSushi/ripgrep --applier archive --bin rg
-
-An HTTP releases.json feed:
-  guppy add --url https://example.com/releases.json --name myapp`,
+  guppy add BurntSushi/ripgrep --applier archive --bin rg`,
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			out := cmd.OutOrStdout()
 
-			a, name, err := f.buildApp(cmd, args)
+			if len(args) == 0 {
+				return fmt.Errorf("expected owner/repo\n\nUsage: guppy add <owner>/<repo>")
+			}
+
+			a, name, err := f.buildApp(cmd, args[0])
 			if err != nil {
 				return err
 			}
@@ -307,55 +333,28 @@ An HTTP releases.json feed:
 		},
 	}
 
-	cmd.Flags().StringVar(&f.name, "name", "", "name for the app (defaults to the repo name)")
-	cmd.Flags().StringVar(&f.applier, "applier", "binary", "how to install the download (binary or archive)")
-	cmd.Flags().StringArrayVar(&f.bin, "bin", nil, "binary to link into the bin directory (repeatable)")
-	cmd.Flags().StringVar(&f.asset, "asset", "", "release asset name to download")
-	cmd.Flags().StringVar(&f.token, "token", "", "GitHub token for private repos or higher rate limits")
-	cmd.Flags().StringVar(&f.url, "url", "", "releases.json URL, for the http provider")
-	cmd.Flags().StringArrayVar(&f.preInstall, "pre-install", nil, "shell command to run before installing (repeatable)")
-	cmd.Flags().StringArrayVar(&f.postInstall, "post-install", nil, "shell command to run after installing (repeatable)")
+	f.register(cmd)
 
 	return cmd
 }
 
-// buildApp turns the add flags into an app config.
-func (f *addFlags) buildApp(cmd *cobra.Command, args []string) (*config.App, string, error) {
-	var (
-		name string
-		repo config.RepositoryConfig
-	)
+// buildApp turns an owner/repo spec plus the add flags into an app config.
+func (f *addFlags) buildApp(cmd *cobra.Command, spec string) (*config.App, string, error) {
+	owner, repoName, found := strings.Cut(spec, "/")
+	if !found || owner == "" || repoName == "" {
+		return nil, "", fmt.Errorf("expected owner/repo, got %q", spec)
+	}
 
-	switch {
-	case f.url != "":
-		if len(args) > 0 {
-			return nil, "", fmt.Errorf("give either owner/repo or --url, not both")
-		}
-		if f.name == "" {
-			return nil, "", fmt.Errorf("--name is required with --url")
-		}
-		name = f.name
-		repo = config.RepositoryConfig{Type: "http", URL: f.url}
-
-	case len(args) == 1:
-		owner, repoName, found := strings.Cut(args[0], "/")
-		if !found || owner == "" || repoName == "" {
-			return nil, "", fmt.Errorf("expected owner/repo, got %q", args[0])
-		}
-		name = f.name
-		if name == "" {
-			name = repoName
-		}
-		repo = config.RepositoryConfig{
-			Type:      "github",
-			Owner:     owner,
-			Repo:      repoName,
-			Token:     f.token,
-			AssetName: f.asset,
-		}
-
-	default:
-		return nil, "", fmt.Errorf("expected owner/repo or --url\n\nUsage: guppy add <owner>/<repo>")
+	name := f.name
+	if name == "" {
+		name = repoName
+	}
+	repo := config.RepositoryConfig{
+		Type:      "github",
+		Owner:     owner,
+		Repo:      repoName,
+		Token:     f.token,
+		AssetName: f.asset,
 	}
 
 	if err := config.ValidateName(name); err != nil {

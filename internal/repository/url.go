@@ -16,6 +16,10 @@ import (
 // user's PATH. An attacker who can rewrite the response can rewrite the
 // checksum with it, so the verification proves nothing.
 //
+// A release names its own artifact URL, independently of where the release data
+// came from, so this is checked against that URL rather than assumed from the
+// provider.
+//
 // Loopback is exempt, the same carve-out browsers make for secure contexts:
 // there is no network segment to sit on, and it is how local test servers and
 // self-hosted feeds on the same box are reached.

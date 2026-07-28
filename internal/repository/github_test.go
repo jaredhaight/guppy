@@ -611,8 +611,9 @@ func (m *mockTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		newURL += "?" + req.URL.RawQuery
 	}
 
-	// Create new request with modified URL
-	newReq, err := http.NewRequest(req.Method, newURL, req.Body)
+	// Create new request with modified URL, carrying the original context so
+	// cancellation still reaches the transport.
+	newReq, err := http.NewRequestWithContext(req.Context(), req.Method, newURL, req.Body)
 	if err != nil {
 		return nil, err
 	}

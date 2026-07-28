@@ -7,10 +7,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -18,6 +15,8 @@ import (
 	"testing"
 
 	"github.com/jaredhaight/guppy/internal/config"
+	"github.com/jaredhaight/guppy/internal/repository"
+	"github.com/jaredhaight/guppy/internal/version"
 )
 
 // testRoot points config and data at a temp dir so tests never touch the real
@@ -66,49 +65,49 @@ func sha256Hex(data []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// releaseServer serves a releases.json feed plus each version's payload, in
-// the format the HTTP provider expects.
-func releaseServer(t *testing.T, payloads map[string][]byte) *httptest.Server {
-	t.Helper()
-
-	mux := http.NewServeMux()
-	server := httptest.NewServer(mux)
-	t.Cleanup(server.Close)
-
-	type release struct {
-		Version string `json:"version"`
-		URL     string `json:"url"`
-		SHA256  string `json:"sha256"`
-	}
-
-	var feed []release
-	for version, payload := range payloads {
-		name := fmt.Sprintf("app-%s.tar.gz", version)
-		feed = append(feed, release{
-			Version: version,
-			URL:     server.URL + "/" + name,
-			SHA256:  sha256Hex(payload),
-		})
-
-		body := payload
-		mux.HandleFunc("/"+name, func(w http.ResponseWriter, r *http.Request) {
-			_, _ = w.Write(body)
-		})
-	}
-
-	mux.HandleFunc("/releases.json", func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(feed)
-	})
-
-	return server
+// fakeRepo stands in for a provider so the install pipeline can be tested
+// without one.
+//
+// It is a fake rather than a test server because GitHubRepository addresses
+// api.github.com unconditionally and keeps its HTTP client unexported, so
+// there is nothing this package can point somewhere else. Testing Install
+// against a real provider would only be testing the provider twice over; what
+// matters here is what Install does with the release it is handed.
+type fakeRepo struct {
+	release *repository.Release
+	body    []byte
 }
 
-// newApp writes an app config pointing at the test server and loads it back.
-func newApp(t *testing.T, name, feedURL string, mutate func(*config.App)) *config.App {
+func (f *fakeRepo) GetLatestRelease(context.Context) (*repository.Release, error) {
+	return f.release, nil
+}
+
+func (f *fakeRepo) CompareVersions(current, latest string) (bool, error) {
+	return version.IsNewer(latest, current)
+}
+
+func (f *fakeRepo) Download(_ context.Context, _ *repository.Release, dest string) error {
+	return os.WriteFile(dest, f.body, 0600)
+}
+
+// release describes payload the way a provider would: an https artifact URL and
+// an "algorithm:hex" checksum, which is the only form parseDigest emits.
+func release(version string, payload []byte) *repository.Release {
+	name := fmt.Sprintf("app-%s.tar.gz", version)
+	return &repository.Release{
+		Version:     version,
+		DownloadURL: "https://example.com/" + name,
+		Checksum:    "sha256:" + sha256Hex(payload),
+		FileName:    name,
+	}
+}
+
+// newApp writes an app config and loads it back.
+func newApp(t *testing.T, name string, mutate func(*config.App)) *config.App {
 	t.Helper()
 
 	a := config.New(name)
-	a.Repository = config.RepositoryConfig{Type: "http", URL: feedURL}
+	a.Repository = config.RepositoryConfig{Type: "github", Owner: "example", Repo: name}
 	a.Applier = "archive"
 	if mutate != nil {
 		mutate(a)
@@ -124,13 +123,9 @@ func newApp(t *testing.T, name, feedURL string, mutate func(*config.App)) *confi
 	return loaded
 }
 
-func installer(t *testing.T, a *config.App, out *bytes.Buffer) *Installer {
-	t.Helper()
-	repo, err := NewRepository(a, false)
-	if err != nil {
-		t.Fatalf("NewRepository() error: %v", err)
-	}
-	return &Installer{Repo: repo, Out: out}
+// installer returns an Installer that hands out rel and serves payload for it.
+func installer(out *bytes.Buffer, rel *repository.Release, payload []byte) *Installer {
+	return &Installer{Repo: &fakeRepo{release: rel, body: payload}, Out: out}
 }
 
 // The full pipeline: download, verify, hooks, extract, link, record version.
@@ -144,17 +139,16 @@ func TestInstallArchiveEndToEnd(t *testing.T) {
 		"hello-1.0.0/hello":  "#!/bin/sh\necho hello\n",
 		"hello-1.0.0/README": "docs",
 	})
-	server := releaseServer(t, map[string][]byte{"1.0.0": payload})
 
 	hookLog := filepath.Join(t.TempDir(), "hooks.log")
-	a := newApp(t, "hello", server.URL+"/releases.json", func(a *config.App) {
+	a := newApp(t, "hello", func(a *config.App) {
 		a.Bin = []string{"hello"}
 		a.PreInstall = []string{`echo "pre $GUPPY_APP $GUPPY_VERSION" >> ` + hookLog}
 		a.PostInstall = []string{`echo "post $GUPPY_VERSION $GUPPY_INSTALL_DIR" >> ` + hookLog}
 	})
 
 	var out bytes.Buffer
-	if err := installer(t, a, &out).Install(context.Background(), a); err != nil {
+	if err := installer(&out, release("1.0.0", payload), payload).Install(context.Background(), a); err != nil {
 		t.Fatalf("Install() error: %v\noutput:\n%s", err, out.String())
 	}
 
@@ -199,7 +193,7 @@ func TestInstallArchiveEndToEnd(t *testing.T) {
 	}
 
 	out.Reset()
-	if err := installer(t, reloaded, &out).Install(context.Background(), reloaded); err != nil {
+	if err := installer(&out, release("1.0.0", payload), payload).Install(context.Background(), reloaded); err != nil {
 		t.Fatalf("second Install() error: %v", err)
 	}
 	if !strings.Contains(out.String(), "up to date") {
@@ -217,18 +211,20 @@ func TestInstallArchiveEndToEnd(t *testing.T) {
 func TestInstallUpgradeReplacesOldVersion(t *testing.T) {
 	testRoot(t)
 
-	server := releaseServer(t, map[string][]byte{
-		"1.0.0": tarGz(t, map[string]string{"app-1.0.0/app": "v1"}),
-		"2.0.0": tarGz(t, map[string]string{"app-2.0.0/app": "v2"}),
-	})
-
-	a := newApp(t, "app", server.URL+"/releases.json", func(a *config.App) {
+	payload := tarGz(t, map[string]string{"app-2.0.0/app": "v2"})
+	a := newApp(t, "app", func(a *config.App) {
 		a.CurrentVersion = "1.0.0"
 		a.Bin = []string{"app"}
 	})
 
+	// Stand in an old install, so the swap has something to replace.
+	installDir, _ := config.InstallDir("app")
+	if err := os.MkdirAll(filepath.Join(installDir, "app-1.0.0"), 0755); err != nil {
+		t.Fatalf("failed to seed the old install: %v", err)
+	}
+
 	var out bytes.Buffer
-	if err := installer(t, a, &out).Install(context.Background(), a); err != nil {
+	if err := installer(&out, release("2.0.0", payload), payload).Install(context.Background(), a); err != nil {
 		t.Fatalf("Install() error: %v", err)
 	}
 
@@ -246,7 +242,6 @@ func TestInstallUpgradeReplacesOldVersion(t *testing.T) {
 	}
 
 	// The previous version's directory is gone, not left alongside the new one.
-	installDir, _ := config.InstallDir("app")
 	if _, err := os.Stat(filepath.Join(installDir, "app-1.0.0")); !os.IsNotExist(err) {
 		t.Error("old version directory survived the upgrade")
 	}
@@ -258,17 +253,14 @@ func TestInstallPreInstallFailureAborts(t *testing.T) {
 	}
 	testRoot(t)
 
-	server := releaseServer(t, map[string][]byte{
-		"1.0.0": tarGz(t, map[string]string{"app-1.0.0/app": "v1"}),
-	})
-
-	a := newApp(t, "app", server.URL+"/releases.json", func(a *config.App) {
+	payload := tarGz(t, map[string]string{"app-1.0.0/app": "v1"})
+	a := newApp(t, "app", func(a *config.App) {
 		a.Bin = []string{"app"}
 		a.PreInstall = []string{"exit 3"}
 	})
 
 	var out bytes.Buffer
-	err := installer(t, a, &out).Install(context.Background(), a)
+	err := installer(&out, release("1.0.0", payload), payload).Install(context.Background(), a)
 	if err == nil {
 		t.Fatal("Install() succeeded, want the pre_install failure to abort it")
 	}
@@ -298,17 +290,14 @@ func TestInstallPostInstallFailureKeepsInstall(t *testing.T) {
 	}
 	testRoot(t)
 
-	server := releaseServer(t, map[string][]byte{
-		"1.0.0": tarGz(t, map[string]string{"app-1.0.0/app": "v1"}),
-	})
-
-	a := newApp(t, "app", server.URL+"/releases.json", func(a *config.App) {
+	payload := tarGz(t, map[string]string{"app-1.0.0/app": "v1"})
+	a := newApp(t, "app", func(a *config.App) {
 		a.Bin = []string{"app"}
 		a.PostInstall = []string{"exit 7"}
 	})
 
 	var out bytes.Buffer
-	err := installer(t, a, &out).Install(context.Background(), a)
+	err := installer(&out, release("1.0.0", payload), payload).Install(context.Background(), a)
 	if err == nil {
 		t.Fatal("Install() succeeded, want the post_install failure reported")
 	}
@@ -332,25 +321,16 @@ func TestInstallPostInstallFailureKeepsInstall(t *testing.T) {
 func TestInstallRejectsBadChecksum(t *testing.T) {
 	testRoot(t)
 
-	mux := http.NewServeMux()
-	server := httptest.NewServer(mux)
-	t.Cleanup(server.Close)
-
 	payload := tarGz(t, map[string]string{"app-1.0.0/app": "v1"})
-	mux.HandleFunc("/app-1.0.0.tar.gz", func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write(payload)
-	})
-	mux.HandleFunc("/releases.json", func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintf(w, `[{"version":"1.0.0","url":"%s/app-1.0.0.tar.gz","sha256":"%s"}]`,
-			server.URL, strings.Repeat("0", 64))
-	})
+	rel := release("1.0.0", payload)
+	rel.Checksum = "sha256:" + strings.Repeat("0", 64)
 
-	a := newApp(t, "app", server.URL+"/releases.json", func(a *config.App) {
+	a := newApp(t, "app", func(a *config.App) {
 		a.Bin = []string{"app"}
 	})
 
 	var out bytes.Buffer
-	err := installer(t, a, &out).Install(context.Background(), a)
+	err := installer(&out, rel, payload).Install(context.Background(), a)
 	if err == nil {
 		t.Fatal("Install() succeeded on a bad checksum, want an error")
 	}
@@ -364,37 +344,21 @@ func TestInstallRejectsBadChecksum(t *testing.T) {
 	}
 }
 
-// unverifiedServer serves a feed whose single release carries no checksum at
-// all, the case where guppy has no way to tell a real artifact from a swapped
-// one.
-func unverifiedServer(t *testing.T, payload []byte) *httptest.Server {
-	t.Helper()
-
-	mux := http.NewServeMux()
-	server := httptest.NewServer(mux)
-	t.Cleanup(server.Close)
-
-	mux.HandleFunc("/app-1.0.0.tar.gz", func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write(payload)
-	})
-	mux.HandleFunc("/releases.json", func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintf(w, `[{"version":"1.0.0","url":"%s/app-1.0.0.tar.gz"}]`, server.URL)
-	})
-	return server
-}
-
 // A release with no checksum is unverifiable, so guppy refuses it rather than
 // installing something it cannot vouch for onto the user's PATH.
 func TestInstallRefusesReleaseWithoutChecksum(t *testing.T) {
 	testRoot(t)
 
-	server := unverifiedServer(t, tarGz(t, map[string]string{"app-1.0.0/app": "v1"}))
-	a := newApp(t, "app", server.URL+"/releases.json", func(a *config.App) {
+	payload := tarGz(t, map[string]string{"app-1.0.0/app": "v1"})
+	rel := release("1.0.0", payload)
+	rel.Checksum = ""
+
+	a := newApp(t, "app", func(a *config.App) {
 		a.Bin = []string{"app"}
 	})
 
 	var out bytes.Buffer
-	err := installer(t, a, &out).Install(context.Background(), a)
+	err := installer(&out, rel, payload).Install(context.Background(), a)
 	if err == nil {
 		t.Fatal("Install() succeeded on a release with no checksum, want an error")
 	}
@@ -413,14 +377,17 @@ func TestInstallRefusesReleaseWithoutChecksum(t *testing.T) {
 func TestInstallAllowUnverifiedWarnsOnStdout(t *testing.T) {
 	testRoot(t)
 
-	server := unverifiedServer(t, tarGz(t, map[string]string{"app-1.0.0/app": "v1"}))
-	a := newApp(t, "app", server.URL+"/releases.json", func(a *config.App) {
+	payload := tarGz(t, map[string]string{"app-1.0.0/app": "v1"})
+	rel := release("1.0.0", payload)
+	rel.Checksum = ""
+
+	a := newApp(t, "app", func(a *config.App) {
 		a.Bin = []string{"app"}
 		a.AllowUnverified = true
 	})
 
 	var out bytes.Buffer
-	if err := installer(t, a, &out).Install(context.Background(), a); err != nil {
+	if err := installer(&out, rel, payload).Install(context.Background(), a); err != nil {
 		t.Fatalf("Install() with allow_unverified error: %v", err)
 	}
 	if !strings.Contains(out.String(), "unverified") {
@@ -431,26 +398,21 @@ func TestInstallAllowUnverifiedWarnsOnStdout(t *testing.T) {
 	}
 }
 
-// The feed names its own artifact URL, so an https feed can still hand back a
-// plain-http artifact. That has to be caught too.
+// A release names its own artifact URL, independently of the channel the
+// release data arrived over, so an insecure artifact URL has to be caught too.
 func TestInstallRejectsInsecureArtifactURL(t *testing.T) {
 	testRoot(t)
 
-	mux := http.NewServeMux()
-	server := httptest.NewServer(mux)
-	t.Cleanup(server.Close)
+	payload := tarGz(t, map[string]string{"app-1.0.0/app": "v1"})
+	rel := release("1.0.0", payload)
+	rel.DownloadURL = "http://example.com/app.tar.gz"
 
-	mux.HandleFunc("/releases.json", func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintf(w, `[{"version":"1.0.0","url":"http://example.com/app.tar.gz","sha256":"%s"}]`,
-			strings.Repeat("a", 64))
-	})
-
-	a := newApp(t, "app", server.URL+"/releases.json", func(a *config.App) {
+	a := newApp(t, "app", func(a *config.App) {
 		a.Bin = []string{"app"}
 	})
 
 	var out bytes.Buffer
-	err := installer(t, a, &out).Install(context.Background(), a)
+	err := installer(&out, rel, payload).Install(context.Background(), a)
 	if err == nil {
 		t.Fatal("Install() accepted a plain-http artifact URL, want an error")
 	}
@@ -459,20 +421,18 @@ func TestInstallRejectsInsecureArtifactURL(t *testing.T) {
 	}
 }
 
-// The HTTP provider emits "sha256:hex" checksums. Before consolidation those
-// reached a bare-hex comparison and every such release failed verification.
-func TestInstallAcceptsHTTPProviderChecksum(t *testing.T) {
+// Checksums arrive as "sha256:hex". Before consolidation those reached a
+// bare-hex comparison and every such release failed verification.
+func TestInstallAcceptsPrefixedChecksum(t *testing.T) {
 	testRoot(t)
 
 	payload := tarGz(t, map[string]string{"app-1.0.0/app": "v1"})
-	server := releaseServer(t, map[string][]byte{"1.0.0": payload})
-
-	a := newApp(t, "app", server.URL+"/releases.json", func(a *config.App) {
+	a := newApp(t, "app", func(a *config.App) {
 		a.Bin = []string{"app"}
 	})
 
 	var out bytes.Buffer
-	if err := installer(t, a, &out).Install(context.Background(), a); err != nil {
+	if err := installer(&out, release("1.0.0", payload), payload).Install(context.Background(), a); err != nil {
 		t.Fatalf("Install() error: %v", err)
 	}
 	if !strings.Contains(out.String(), "checksum verified") {
@@ -483,24 +443,20 @@ func TestInstallAcceptsHTTPProviderChecksum(t *testing.T) {
 func TestInstallBinaryApplier(t *testing.T) {
 	testRoot(t)
 
-	mux := http.NewServeMux()
-	server := httptest.NewServer(mux)
-	t.Cleanup(server.Close)
-
 	payload := []byte("#!/bin/sh\necho tool\n")
-	mux.HandleFunc("/tool", func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write(payload)
-	})
-	mux.HandleFunc("/releases.json", func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintf(w, `[{"version":"1.2.3","url":"%s/tool","sha256":"%s"}]`, server.URL, sha256Hex(payload))
-	})
+	rel := &repository.Release{
+		Version:     "1.2.3",
+		DownloadURL: "https://example.com/tool",
+		Checksum:    "sha256:" + sha256Hex(payload),
+		FileName:    "tool",
+	}
 
-	a := newApp(t, "tool", server.URL+"/releases.json", func(a *config.App) {
+	a := newApp(t, "tool", func(a *config.App) {
 		a.Applier = "binary"
 	})
 
 	var out bytes.Buffer
-	if err := installer(t, a, &out).Install(context.Background(), a); err != nil {
+	if err := installer(&out, rel, payload).Install(context.Background(), a); err != nil {
 		t.Fatalf("Install() error: %v", err)
 	}
 
@@ -524,10 +480,7 @@ func TestInstallBinaryApplier(t *testing.T) {
 func TestCheck(t *testing.T) {
 	testRoot(t)
 
-	server := releaseServer(t, map[string][]byte{
-		"1.0.0": tarGz(t, map[string]string{"app-1.0.0/app": "v1"}),
-		"2.0.0": tarGz(t, map[string]string{"app-2.0.0/app": "v2"}),
-	})
+	payload := tarGz(t, map[string]string{"app-2.0.0/app": "v2"})
 
 	tests := []struct {
 		name    string
@@ -542,12 +495,12 @@ func TestCheck(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			a := config.New("checkapp")
-			a.Repository = config.RepositoryConfig{Type: "http", URL: server.URL + "/releases.json"}
+			a.Repository = config.RepositoryConfig{Type: "github", Owner: "example", Repo: "checkapp"}
 			a.Applier = "archive"
 			a.CurrentVersion = tt.current
 
 			var out bytes.Buffer
-			if err := installer(t, a, &out).Check(context.Background(), a); err != nil {
+			if err := installer(&out, release("2.0.0", payload), payload).Check(context.Background(), a); err != nil {
 				t.Fatalf("Check() error: %v", err)
 			}
 			if !strings.Contains(out.String(), tt.want) {
@@ -566,16 +519,13 @@ func TestCheck(t *testing.T) {
 func TestRemove(t *testing.T) {
 	testRoot(t)
 
-	server := releaseServer(t, map[string][]byte{
-		"1.0.0": tarGz(t, map[string]string{"app-1.0.0/app": "v1"}),
-	})
-
-	a := newApp(t, "app", server.URL+"/releases.json", func(a *config.App) {
+	payload := tarGz(t, map[string]string{"app-1.0.0/app": "v1"})
+	a := newApp(t, "app", func(a *config.App) {
 		a.Bin = []string{"app"}
 	})
 
 	var out bytes.Buffer
-	if err := installer(t, a, &out).Install(context.Background(), a); err != nil {
+	if err := installer(&out, release("1.0.0", payload), payload).Install(context.Background(), a); err != nil {
 		t.Fatalf("Install() error: %v", err)
 	}
 
@@ -606,7 +556,7 @@ func TestNewRepository(t *testing.T) {
 	}{
 		{name: "github", app: config.App{Repository: config.RepositoryConfig{Type: "github", Owner: "o", Repo: "r"}}},
 		{name: "github with asset", app: config.App{Repository: config.RepositoryConfig{Type: "github", Owner: "o", Repo: "r", AssetName: "x.tar.gz"}}},
-		{name: "http", app: config.App{Repository: config.RepositoryConfig{Type: "http", URL: "https://example.com/r.json"}}},
+		{name: "http is no longer a provider", app: config.App{Repository: config.RepositoryConfig{Type: "http"}}, wantErr: true},
 		{name: "unknown", app: config.App{Repository: config.RepositoryConfig{Type: "ftp"}}, wantErr: true},
 	}
 
