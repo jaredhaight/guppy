@@ -1,0 +1,39 @@
+name: Claude Review
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+
+# One review at a time per PR; a new push cancels the review of the stale commit.
+concurrency:
+  group: claude-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write # Post review comments
+      id-token: write # OIDC auth for claude-code-action
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # Review needs the base branch to diff against
+
+      - name: Review pull request
+        uses: anthropics/claude-code-action@be7b93b1907a4abad570368f3c74b6fe3807510b # v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+
+          # Review logic lives in Anthropic's code-review plugin, not in a prompt here
+          plugin_marketplaces: "https://github.com/anthropics/claude-code.git"
+          plugins: "code-review@claude-code-plugins"
+          prompt: "/code-review:code-review ${{ github.repository }}/pull/${{ github.event.pull_request.number }}"
+
+          # Default is 10, too few for a multi-file review. Drop this if runs finish well under.
+          claude_args: "--max-turns 30"
