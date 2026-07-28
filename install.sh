@@ -5,10 +5,10 @@
 #
 # This script only bootstraps: it downloads a throwaway guppy to a temp
 # directory, checks it against the release checksums, and then hands off to
-# `guppy install jaredhaight/guppy`. Guppy installs itself through its own
-# pipeline, so afterwards it is an ordinary managed app and `guppy update
-# guppy` keeps it current. That costs one extra download and saves this script
-# from having to know guppy's config format.
+# `guppy add jaredhaight/guppy` followed by `guppy install guppy`. Guppy
+# installs itself through its own pipeline, so afterwards it is an ordinary
+# managed app and `guppy update guppy` keeps it current. That costs one extra
+# download and saves this script from having to know guppy's config format.
 set -eu
 
 REPO="jaredhaight/guppy"
@@ -68,8 +68,8 @@ fi
 echo "✓ checksum verified"
 chmod +x "$tmp/guppy"
 
-# Re-running the script should update rather than fail: `guppy install
-# owner/repo` refuses to overwrite an app that already has a config.
+# Re-running the script should update rather than fail: `guppy add` refuses to
+# overwrite an app that already has a config.
 #
 # Read the names out of the table only, starting after the header row. With no
 # apps configured guppy prints prose instead of a table, and that prose
@@ -80,7 +80,8 @@ if "$tmp/guppy" list 2>/dev/null |
 	grep -qx guppy; then
 	"$tmp/guppy" update guppy
 else
-	"$tmp/guppy" install "$REPO" --asset "$asset"
+	"$tmp/guppy" add "$REPO" --asset "$asset"
+	"$tmp/guppy" install guppy
 fi
 
 bin=$("$tmp/guppy" bin)

@@ -77,7 +77,8 @@ func newRootCmd() *cobra.Command {
 		Long: `Guppy checks for new releases of the applications it manages, downloads
 them, and installs their binaries into a folder on your PATH.
 
-  guppy install BurntSushi/ripgrep --applier archive --bin rg
+  guppy add BurntSushi/ripgrep --applier archive --bin rg
+  guppy install ripgrep
   guppy update`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
@@ -171,29 +172,26 @@ func (c *cli) watch(cmd *cobra.Command, args []string) error {
 }
 
 func (c *cli) newInstallCmd() *cobra.Command {
-	f := &addFlags{}
+	return &cobra.Command{
+		Use:   "install <app>",
+		Short: "Install an application guppy manages",
+		Long: `Install an application guppy already manages. Add it first:
 
-	cmd := &cobra.Command{
-		Use:   "install <owner>/<repo>|<app>",
-		Short: "Install an application",
-		Long: `Install an application.
-
-Given owner/repo, guppy writes the config and installs it in one step:
-
-  guppy install BurntSushi/ripgrep --applier archive --bin rg
-
-Given the name of an app you have already added, guppy just installs it:
-
+  guppy add BurntSushi/ripgrep --applier archive --bin rg
   guppy install ripgrep`,
 		Args:              cobra.ExactArgs(1),
 		ValidArgsFunction: c.completeAppNames,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			name, err := c.installTarget(cmd, f, args[0])
-			if err != nil {
-				return err
+			// Splitting add out from install invites this, so name the fix
+			// rather than reporting "no app named BurntSushi/ripgrep". The
+			// slash is an exact discriminator: ValidateName forbids "/" in an
+			// app name, so an argument holding one can never be an app guppy
+			// manages.
+			if strings.Contains(args[0], "/") {
+				return fmt.Errorf("%q looks like a repository, but install only takes apps guppy already manages\n\nTo add it: guppy add %s", args[0], args[0])
 			}
 
-			a, err := config.LoadApp(name)
+			a, err := config.LoadApp(args[0])
 			if err != nil {
 				return err
 			}
@@ -206,45 +204,6 @@ Given the name of an app you have already added, guppy just installs it:
 			return installer.Install(cmd.Context(), a)
 		},
 	}
-
-	f.register(cmd)
-	return cmd
-}
-
-// installTarget turns install's single argument into the name of an app guppy
-// manages, adding it first when the argument names a repository.
-//
-// The slash is the discriminator, and it is exact rather than a guess:
-// ValidateName forbids "/" in an app name, so an argument containing one can
-// never be the name of an app guppy already manages.
-func (c *cli) installTarget(cmd *cobra.Command, f *addFlags, arg string) (string, error) {
-	if !strings.Contains(arg, "/") {
-		if f.changed(cmd) {
-			return "", fmt.Errorf("flags like --applier and --bin describe a new app, but %q names one that already has a config\n\nEdit that config to change them, or give owner/repo to add a new app", arg)
-		}
-		return arg, nil
-	}
-
-	a, name, err := f.buildApp(cmd, arg)
-	if err != nil {
-		return "", err
-	}
-
-	// Installing over an app guppy already manages would quietly rewrite its
-	// config, so say what to run instead.
-	if _, err := config.AppPath(name); err == nil {
-		return "", fmt.Errorf("app %q already exists\n\nTo update it: guppy update %s", name, name)
-	}
-
-	if err := a.Validate(); err != nil {
-		return "", err
-	}
-	if err := a.Save(); err != nil {
-		return "", err
-	}
-
-	fmt.Fprintf(cmd.OutOrStdout(), "✓ Added %s (%s)\n", name, a.Path())
-	return name, nil
 }
 
 func (c *cli) newUpdateCmd() *cobra.Command {
@@ -258,11 +217,11 @@ If an app fails, the rest still run, and guppy reports how many failed.`,
 		Args:              cobra.ArbitraryArgs,
 		ValidArgsFunction: c.completeAppNames,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// Splitting install out from update invites this, so name the fix
+			// Splitting add out from update invites this, so name the fix
 			// rather than reporting "no app named BurntSushi/ripgrep".
 			for _, arg := range args {
 				if strings.Contains(arg, "/") {
-					return fmt.Errorf("%q looks like a repository, but update only takes apps guppy already manages\n\nTo add and install it: guppy install %s", arg, arg)
+					return fmt.Errorf("%q looks like a repository, but update only takes apps guppy already manages\n\nTo add it: guppy add %s", arg, arg)
 				}
 			}
 
@@ -393,8 +352,7 @@ func newVersionCmd() *cobra.Command {
 	}
 }
 
-// addFlags are the flags that describe a new app. Both add and install take
-// them, so they're registered from one place rather than declared twice.
+// addFlags are the flags that describe a new app, as given to add.
 type addFlags struct {
 	name        string
 	applier     string
@@ -419,18 +377,6 @@ func (f *addFlags) register(cmd *cobra.Command) {
 	// above rather than anything that can happen at runtime.
 	_ = cmd.RegisterFlagCompletionFunc("applier",
 		cobra.FixedCompletions([]string{"binary", "archive"}, cobra.ShellCompDirectiveNoFileComp))
-}
-
-// changed reports whether any app-describing flag was given. It asks cobra
-// rather than inspecting the values because --applier has a default, so it
-// always looks set.
-func (f *addFlags) changed(cmd *cobra.Command) bool {
-	for _, name := range []string{"name", "applier", "bin", "asset", "token", "pre-install", "post-install"} {
-		if cmd.Flags().Changed(name) {
-			return true
-		}
-	}
-	return false
 }
 
 func (c *cli) newAddCmd() *cobra.Command {

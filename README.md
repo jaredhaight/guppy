@@ -1,9 +1,6 @@
 # Guppy
 
-Guppy is a package manager for applications published as GitHub releases. It's primarily designed around two use cases.
-
-1. Developers who want a simple update mechanism for their deployed applications. This was my primary idea in making this as the problem comes up with most everything I develop. You can ship guppy along with your app and use it to keep the app up to date.
-2. Users who want to keep open source applications hosted on github up to date on their machine. Guppy manages any number of apps, installs their binaries into a folder on your PATH, and keeps them current.
+Guppy is a package manager for applications published as GitHub releases. It's for keeping open source applications hosted on GitHub up to date on your machine: guppy manages any number of apps, installs their binaries into a folder on your PATH, and keeps them current.
 
 # How it works
 
@@ -29,10 +26,14 @@ Add the bin folder to your PATH:
 export PATH="$(guppy bin):$PATH"
 ```
 
-Install an app:
+Add an app, then install it:
 
 ```bash
-guppy install BurntSushi/ripgrep --applier archive --bin rg
+guppy add BurntSushi/ripgrep --applier archive --bin rg
+```
+
+```bash
+guppy install ripgrep
 ```
 
 Then keep everything current with `guppy update`, which updates every app you've added.
@@ -47,11 +48,10 @@ source <(guppy completion bash)   # or zsh, fish, powershell
 
 | Command | What it does |
 |---|---|
-| `guppy install <owner>/<repo>` | Add an app and install it |
-| `guppy install <app>` | Install an app you've already added |
+| `guppy add <owner>/<repo>` | Start managing an app, without installing it |
+| `guppy install <app>` | Install an app you've added |
 | `guppy update [app...]` | Update every app, or just the ones you name |
 | `guppy check [app...]` | Report what's available without installing |
-| `guppy add <owner>/<repo>` | Start managing an app without installing it |
 | `guppy list` | Show managed apps and their versions |
 | `guppy remove <app>` | Remove an app and everything guppy installed for it (alias: `rm`) |
 | `guppy bin` | Print the folder guppy links binaries into |

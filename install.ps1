@@ -4,9 +4,9 @@
 #
 # This script only bootstraps: it downloads a throwaway guppy to a temp
 # directory, checks it against the release checksums, and then hands off to
-# `guppy install jaredhaight/guppy`. Guppy installs itself through its own
-# pipeline, so afterwards it is an ordinary managed app and `guppy update
-# guppy` keeps it current.
+# `guppy add jaredhaight/guppy` followed by `guppy install guppy`. Guppy
+# installs itself through its own pipeline, so afterwards it is an ordinary
+# managed app and `guppy update guppy` keeps it current.
 $ErrorActionPreference = 'Stop'
 
 $repo = 'jaredhaight/guppy'
@@ -47,8 +47,8 @@ try {
     }
     Write-Host "* checksum verified"
 
-    # Re-running the script should update rather than fail: `guppy install
-    # owner/repo` refuses to overwrite an app that already has a config.
+    # Re-running the script should update rather than fail: `guppy add`
+    # refuses to overwrite an app that already has a config.
     #
     # Read the names out of the table only, starting after the header row. With
     # no apps configured guppy prints prose instead of a table, and that prose
@@ -66,7 +66,9 @@ try {
     else {
         # --bin is needed here and not on Unix: without it the installed file
         # is named "guppy" with no extension, which Windows won't run.
-        & "$tmp\guppy.exe" install $repo --asset $asset --bin guppy.exe
+        & "$tmp\guppy.exe" add $repo --asset $asset --bin guppy.exe
+        if ($LASTEXITCODE -ne 0) { throw "guppy exited with $LASTEXITCODE" }
+        & "$tmp\guppy.exe" install guppy
     }
     if ($LASTEXITCODE -ne 0) { throw "guppy exited with $LASTEXITCODE" }
 
