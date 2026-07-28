@@ -72,35 +72,34 @@ func newRootCmd() *cobra.Command {
 	c := &cli{}
 
 	root := &cobra.Command{
-		Use:   "guppy [app...]",
+		Use:   "guppy",
 		Short: "Guppy is a software update helper",
 		Long: `Guppy checks for new releases of the applications it manages, downloads
 them, and installs their binaries into a folder on your PATH.
 
-With no arguments it updates every configured app.`,
+  guppy install BurntSushi/ripgrep --applier archive --bin rg
+  guppy update`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
-		Args:          cobra.ArbitraryArgs,
+		// Args is deliberately left nil. Cobra then falls back to legacyArgs,
+		// which rejects an unrecognized first argument with a "did you mean"
+		// suggestion — the right answer for anyone still typing the old
+		// `guppy <app>` form.
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-			if c.configDir != "" {
-				return os.Setenv(config.EnvConfigDir, c.configDir)
-			}
-			return nil
+			return c.applyConfigDir()
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// If no interval flag is set, run once
-			if c.interval == "" {
-				return c.updateApps(cmd, args)
-			}
-			return c.watch(cmd, args)
+			return cmd.Help()
 		},
 	}
 
 	root.PersistentFlags().StringVar(&c.configDir, "config-dir", "", "directory holding guppy's app configs")
 	root.PersistentFlags().BoolVarP(&c.debug, "debug", "d", false, "enable debug logging")
-	root.Flags().StringVarP(&c.interval, "interval", "i", "", "check for updates at regular intervals (e.g., 15m, 1h, 1d, or HH:MM:SS)")
+	_ = root.MarkPersistentFlagDirname("config-dir")
 
 	root.AddCommand(
+		c.newInstallCmd(),
+		c.newUpdateCmd(),
 		c.newCheckCmd(),
 		newVersionCmd(),
 		c.newAddCmd(),
@@ -108,7 +107,26 @@ With no arguments it updates every configured app.`,
 		c.newRemoveCmd(),
 		c.newBinCmd(),
 	)
+
+	// The completion command is left to cobra, which adds it during Execute.
+	// Adding it here instead would bind it to os.Stdout: it captures
+	// OutOrStdout at the moment it is created, before any caller has had a
+	// chance to redirect the output.
 	return root
+}
+
+// applyConfigDir publishes --config-dir to the rest of guppy, which reads it
+// from the environment rather than from the flag.
+//
+// The completion path calls this for itself. Cobra's hidden __complete command
+// sets DisableFlagParsing, so PersistentPreRunE runs before --config-dir has
+// been parsed and cannot do the job on completion's behalf; the flags are only
+// re-parsed later, just before the ValidArgsFunction is called.
+func (c *cli) applyConfigDir() error {
+	if c.configDir == "" {
+		return nil
+	}
+	return os.Setenv(config.EnvConfigDir, c.configDir)
 }
 
 // watch runs update checks on a timer until the context is cancelled.
@@ -152,11 +170,141 @@ func (c *cli) watch(cmd *cobra.Command, args []string) error {
 	}
 }
 
+func (c *cli) newInstallCmd() *cobra.Command {
+	f := &addFlags{}
+
+	cmd := &cobra.Command{
+		Use:   "install <owner>/<repo>|<app>",
+		Short: "Install an application",
+		Long: `Install an application.
+
+Given owner/repo, guppy writes the config and installs it in one step:
+
+  guppy install BurntSushi/ripgrep --applier archive --bin rg
+
+Given the name of an app you have already added, guppy just installs it:
+
+  guppy install ripgrep`,
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: c.completeAppNames,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			name, err := c.installTarget(cmd, f, args[0])
+			if err != nil {
+				return err
+			}
+
+			a, err := config.LoadApp(name)
+			if err != nil {
+				return err
+			}
+
+			c.debugf(cmd, "Loaded app %s from %s", a.Name(), a.Path())
+			installer, err := c.newInstaller(cmd, a)
+			if err != nil {
+				return err
+			}
+			return installer.Install(cmd.Context(), a)
+		},
+	}
+
+	f.register(cmd)
+	return cmd
+}
+
+// installTarget turns install's single argument into the name of an app guppy
+// manages, adding it first when the argument names a repository.
+//
+// The slash is the discriminator, and it is exact rather than a guess:
+// ValidateName forbids "/" in an app name, so an argument containing one can
+// never be the name of an app guppy already manages.
+func (c *cli) installTarget(cmd *cobra.Command, f *addFlags, arg string) (string, error) {
+	if !strings.Contains(arg, "/") {
+		if f.changed(cmd) {
+			return "", fmt.Errorf("flags like --applier and --bin describe a new app, but %q names one that already has a config\n\nEdit that config to change them, or give owner/repo to add a new app", arg)
+		}
+		return arg, nil
+	}
+
+	a, name, err := f.buildApp(cmd, arg)
+	if err != nil {
+		return "", err
+	}
+
+	// Installing over an app guppy already manages would quietly rewrite its
+	// config, so say what to run instead.
+	if _, err := config.AppPath(name); err == nil {
+		return "", fmt.Errorf("app %q already exists\n\nTo update it: guppy update %s", name, name)
+	}
+
+	if err := a.Validate(); err != nil {
+		return "", err
+	}
+	if err := a.Save(); err != nil {
+		return "", err
+	}
+
+	fmt.Fprintf(cmd.OutOrStdout(), "✓ Added %s (%s)\n", name, a.Path())
+	return name, nil
+}
+
+func (c *cli) newUpdateCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "update [app...]",
+		Short: "Update managed applications",
+		Long: `Update the applications guppy manages. With no arguments it updates
+every one of them.
+
+If an app fails, the rest still run, and guppy reports how many failed.`,
+		Args:              cobra.ArbitraryArgs,
+		ValidArgsFunction: c.completeAppNames,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			// Splitting install out from update invites this, so name the fix
+			// rather than reporting "no app named BurntSushi/ripgrep".
+			for _, arg := range args {
+				if strings.Contains(arg, "/") {
+					return fmt.Errorf("%q looks like a repository, but update only takes apps guppy already manages\n\nTo add and install it: guppy install %s", arg, arg)
+				}
+			}
+
+			if c.interval == "" {
+				return c.updateApps(cmd, args)
+			}
+			return c.watch(cmd, args)
+		},
+	}
+
+	cmd.Flags().StringVarP(&c.interval, "interval", "i", "", "check for updates at regular intervals (e.g., 15m, 1h, 1d, or HH:MM:SS)")
+	return cmd
+}
+
+// completeAppNames completes the names of the apps guppy manages.
+func (c *cli) completeAppNames(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+	if err := c.applyConfigDir(); err != nil {
+		return nil, cobra.ShellCompDirectiveError
+	}
+
+	names, err := config.ListApps()
+	if err != nil {
+		return nil, cobra.ShellCompDirectiveError
+	}
+
+	var matches []string
+	for _, name := range names {
+		// Skipping what's already on the line is also what keeps the
+		// single-argument commands from offering a second one.
+		if strings.HasPrefix(name, toComplete) && !slices.Contains(args, name) {
+			matches = append(matches, name)
+		}
+	}
+	return matches, cobra.ShellCompDirectiveNoFileComp
+}
+
 func (c *cli) newCheckCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "check [app...]",
-		Short: "Check for available updates without installing them",
-		Args:  cobra.ArbitraryArgs,
+		Use:               "check [app...]",
+		Short:             "Check for available updates without installing them",
+		Args:              cobra.ArbitraryArgs,
+		ValidArgsFunction: c.completeAppNames,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			apps, err := resolveApps(args)
 			if err != nil {
@@ -206,10 +354,7 @@ func (c *cli) newListCmd() *cobra.Command {
 					version = "-"
 				}
 
-				source := a.Repository.URL
-				if a.Repository.Type == "github" {
-					source = a.Repository.Owner + "/" + a.Repository.Repo
-				}
+				source := a.Repository.Owner + "/" + a.Repository.Repo
 
 				fmt.Fprintf(out, "%-24s %-14s %s\n", name, version, source)
 			}
@@ -248,36 +393,67 @@ func newVersionCmd() *cobra.Command {
 	}
 }
 
-// addFlags are the add command's own flags, scoped to it rather than shared.
+// addFlags are the flags that describe a new app. Both add and install take
+// them, so they're registered from one place rather than declared twice.
 type addFlags struct {
 	name        string
 	applier     string
 	bin         []string
 	asset       string
 	token       string
-	url         string
 	preInstall  []string
 	postInstall []string
+}
+
+// register declares the app-describing flags on cmd.
+func (f *addFlags) register(cmd *cobra.Command) {
+	cmd.Flags().StringVar(&f.name, "name", "", "name for the app (defaults to the repo name)")
+	cmd.Flags().StringVar(&f.applier, "applier", "binary", "how to install the download (binary or archive)")
+	cmd.Flags().StringArrayVar(&f.bin, "bin", nil, "binary to link into the bin directory (repeatable)")
+	cmd.Flags().StringVar(&f.asset, "asset", "", "release asset name to download")
+	cmd.Flags().StringVar(&f.token, "token", "", "GitHub token for private repos or higher rate limits")
+	cmd.Flags().StringArrayVar(&f.preInstall, "pre-install", nil, "shell command to run before installing (repeatable)")
+	cmd.Flags().StringArrayVar(&f.postInstall, "post-install", nil, "shell command to run after installing (repeatable)")
+
+	// Only errors if the flag is missing, which would be a bug on the line
+	// above rather than anything that can happen at runtime.
+	_ = cmd.RegisterFlagCompletionFunc("applier",
+		cobra.FixedCompletions([]string{"binary", "archive"}, cobra.ShellCompDirectiveNoFileComp))
+}
+
+// changed reports whether any app-describing flag was given. It asks cobra
+// rather than inspecting the values because --applier has a default, so it
+// always looks set.
+func (f *addFlags) changed(cmd *cobra.Command) bool {
+	for _, name := range []string{"name", "applier", "bin", "asset", "token", "pre-install", "post-install"} {
+		if cmd.Flags().Changed(name) {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *cli) newAddCmd() *cobra.Command {
 	f := &addFlags{}
 
 	cmd := &cobra.Command{
-		Use:   "add [owner/repo]",
-		Short: "Add an application for guppy to manage",
-		Long: `Add an application for guppy to manage.
+		Use:   "add <owner>/<repo>",
+		Short: "Add an application for guppy to manage, without installing it",
+		Long: `Add an application for guppy to manage. This writes the config and
+downloads nothing; run 'guppy install <app>' to install it.
 
-GitHub releases:
-  guppy add BurntSushi/ripgrep --applier archive --bin rg
-
-An HTTP releases.json feed:
-  guppy add --url https://example.com/releases.json --name myapp`,
+  guppy add BurntSushi/ripgrep --applier archive --bin rg`,
 		Args: cobra.MaximumNArgs(1),
+		// The argument is a repository, not a path or an app guppy knows about.
+		ValidArgsFunction: cobra.NoFileCompletions,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			out := cmd.OutOrStdout()
 
-			a, name, err := f.buildApp(cmd, args)
+			if len(args) == 0 {
+				return fmt.Errorf("expected owner/repo\n\nUsage: guppy add <owner>/<repo>")
+			}
+
+			a, name, err := f.buildApp(cmd, args[0])
 			if err != nil {
 				return err
 			}
@@ -307,55 +483,28 @@ An HTTP releases.json feed:
 		},
 	}
 
-	cmd.Flags().StringVar(&f.name, "name", "", "name for the app (defaults to the repo name)")
-	cmd.Flags().StringVar(&f.applier, "applier", "binary", "how to install the download (binary or archive)")
-	cmd.Flags().StringArrayVar(&f.bin, "bin", nil, "binary to link into the bin directory (repeatable)")
-	cmd.Flags().StringVar(&f.asset, "asset", "", "release asset name to download")
-	cmd.Flags().StringVar(&f.token, "token", "", "GitHub token for private repos or higher rate limits")
-	cmd.Flags().StringVar(&f.url, "url", "", "releases.json URL, for the http provider")
-	cmd.Flags().StringArrayVar(&f.preInstall, "pre-install", nil, "shell command to run before installing (repeatable)")
-	cmd.Flags().StringArrayVar(&f.postInstall, "post-install", nil, "shell command to run after installing (repeatable)")
+	f.register(cmd)
 
 	return cmd
 }
 
-// buildApp turns the add flags into an app config.
-func (f *addFlags) buildApp(cmd *cobra.Command, args []string) (*config.App, string, error) {
-	var (
-		name string
-		repo config.RepositoryConfig
-	)
+// buildApp turns an owner/repo spec plus the add flags into an app config.
+func (f *addFlags) buildApp(cmd *cobra.Command, spec string) (*config.App, string, error) {
+	owner, repoName, found := strings.Cut(spec, "/")
+	if !found || owner == "" || repoName == "" {
+		return nil, "", fmt.Errorf("expected owner/repo, got %q", spec)
+	}
 
-	switch {
-	case f.url != "":
-		if len(args) > 0 {
-			return nil, "", fmt.Errorf("give either owner/repo or --url, not both")
-		}
-		if f.name == "" {
-			return nil, "", fmt.Errorf("--name is required with --url")
-		}
-		name = f.name
-		repo = config.RepositoryConfig{Type: "http", URL: f.url}
-
-	case len(args) == 1:
-		owner, repoName, found := strings.Cut(args[0], "/")
-		if !found || owner == "" || repoName == "" {
-			return nil, "", fmt.Errorf("expected owner/repo, got %q", args[0])
-		}
-		name = f.name
-		if name == "" {
-			name = repoName
-		}
-		repo = config.RepositoryConfig{
-			Type:      "github",
-			Owner:     owner,
-			Repo:      repoName,
-			Token:     f.token,
-			AssetName: f.asset,
-		}
-
-	default:
-		return nil, "", fmt.Errorf("expected owner/repo or --url\n\nUsage: guppy add <owner>/<repo>")
+	name := f.name
+	if name == "" {
+		name = repoName
+	}
+	repo := config.RepositoryConfig{
+		Type:      "github",
+		Owner:     owner,
+		Repo:      repoName,
+		Token:     f.token,
+		AssetName: f.asset,
 	}
 
 	if err := config.ValidateName(name); err != nil {
@@ -379,10 +528,11 @@ func (c *cli) newRemoveCmd() *cobra.Command {
 	var yes bool
 
 	cmd := &cobra.Command{
-		Use:     "remove <app>",
-		Aliases: []string{"rm"},
-		Short:   "Remove an application and everything guppy installed for it",
-		Args:    cobra.ExactArgs(1),
+		Use:               "remove <app>",
+		Aliases:           []string{"rm"},
+		Short:             "Remove an application and everything guppy installed for it",
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: c.completeAppNames,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			out := cmd.OutOrStdout()
 

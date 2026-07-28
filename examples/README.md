@@ -24,7 +24,7 @@ cp ripgrep.yaml ~/.config/guppy/apps/
 Then install it:
 
 ```bash
-guppy ripgrep
+guppy install ripgrep
 ```
 
 Binaries land in the folder `guppy bin` prints. Add it to your PATH:

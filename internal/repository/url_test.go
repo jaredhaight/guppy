@@ -59,20 +59,6 @@ func TestConvertGitHubReleaseRejectsUnsafeAssetName(t *testing.T) {
 	}
 }
 
-// Same for the HTTP feed, whose file name is the last segment of a URL it
-// chooses.
-func TestConvertHTTPReleaseRejectsUnsafeFileName(t *testing.T) {
-	repo := NewHTTPRepository("https://example.com/releases.json")
-
-	if _, err := repo.convertHTTPRelease(&httpRelease{
-		Version: "1.0.0",
-		URL:     "https://example.com/..",
-		SHA256:  "abc",
-	}); err == nil {
-		t.Error("convertHTTPRelease() accepted a URL whose last segment is \"..\"")
-	}
-}
-
 func TestValidateURL(t *testing.T) {
 	tests := []struct {
 		name    string

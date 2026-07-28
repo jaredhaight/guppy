@@ -71,12 +71,8 @@ func NewRepository(a *config.App, debug bool) (repository.Repository, error) {
 		}
 		repo.SetDebug(debug)
 		return repo, nil
-	case "http":
-		repo := repository.NewHTTPRepository(a.Repository.URL)
-		repo.SetDebug(debug)
-		return repo, nil
 	default:
-		return nil, fmt.Errorf("unsupported repository type: %s", a.Repository.Type)
+		return nil, fmt.Errorf("unsupported repository type: %s (guppy installs from GitHub releases only)", a.Repository.Type)
 	}
 }
 

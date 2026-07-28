@@ -42,9 +42,9 @@ linters:
 
   exclusions:
     rules:
-      # MD5 and SHA-1 are part of the documented releases.json format, kept
-      # for compatibility with existing feeds. Guppy prefers SHA-256 when a
-      # feed offers a choice and warns when it has to fall back.
+      # The MD5 and SHA-1 verifiers are kept for release feeds that offer
+      # nothing stronger. Guppy prefers SHA-256 whenever it is offered and
+      # warns when it has had to fall back.
       - path: internal/checksum/checksum\.go
         linters:
           - gosec

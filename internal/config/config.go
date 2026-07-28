@@ -9,7 +9,6 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/jaredhaight/guppy/internal/repository"
 	"github.com/spf13/viper"
 	"gopkg.in/yaml.v3"
 )
@@ -52,7 +51,14 @@ type RepositoryConfig struct {
 	Repo      string `json:"repo,omitempty" yaml:"repo,omitempty" mapstructure:"repo"`
 	Token     string `json:"token,omitempty" yaml:"token,omitempty" mapstructure:"token"`
 	AssetName string `json:"asset_name,omitempty" yaml:"asset_name,omitempty" mapstructure:"asset_name"`
-	URL       string `json:"url,omitempty" yaml:"url,omitempty" mapstructure:"url"`
+
+	// URL was the http provider's release feed. The field outlives its
+	// provider so that a config written for it fails with an explanation:
+	// LoadFile runs UnmarshalExact before Validate, so deleting the field
+	// outright would reject these configs with viper's "invalid keys" and the
+	// user would never see why. Untagged for json and yaml, so Save drops the
+	// key the next time it writes.
+	URL string `json:"-" yaml:"-" mapstructure:"url"`
 }
 
 // App names become filenames and directory names, so they're restricted rather
@@ -198,28 +204,19 @@ func (a *App) Validate() error {
 		return fmt.Errorf("repository type is required")
 	}
 
-	if a.Repository.Type != "github" && a.Repository.Type != "http" {
-		return fmt.Errorf("invalid repository type: %s (valid values: github, http)", a.Repository.Type)
+	if a.Repository.Type != "github" {
+		return fmt.Errorf("invalid repository type: %s (guppy installs from GitHub releases only; valid value: github)", a.Repository.Type)
 	}
 
-	if a.Repository.Type == "github" {
-		if a.Repository.Owner == "" {
-			return fmt.Errorf("repository owner is required for GitHub")
-		}
-		if a.Repository.Repo == "" {
-			return fmt.Errorf("repository repo is required for GitHub")
-		}
+	if a.Repository.URL != "" {
+		return fmt.Errorf("repository.url is no longer supported: the http provider was removed, so set repository.owner and repository.repo instead")
 	}
 
-	if a.Repository.Type == "http" {
-		if a.Repository.URL == "" {
-			return fmt.Errorf("repository url is required for HTTP")
-		}
-		if !a.AllowUnverified {
-			if err := repository.ValidateURL(a.Repository.URL); err != nil {
-				return err
-			}
-		}
+	if a.Repository.Owner == "" {
+		return fmt.Errorf("repository owner is required for GitHub")
+	}
+	if a.Repository.Repo == "" {
+		return fmt.Errorf("repository repo is required for GitHub")
 	}
 
 	if a.Applier == "" {
