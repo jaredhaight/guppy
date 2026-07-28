@@ -474,7 +474,7 @@ downloads nothing; run 'guppy install <app>' to install it.
 
 			binDir, err := config.BinDir()
 			if err == nil {
-				fmt.Fprintf(out, "\nRun 'guppy %s' to install it. Binaries are linked into:\n  %s\n", name, binDir)
+				fmt.Fprintf(out, "\nRun 'guppy install %s' to install it. Binaries are linked into:\n  %s\n", name, binDir)
 				if !onPath(binDir) {
 					fmt.Fprintf(out, "\nThat directory isn't on your PATH yet. Add it with:\n  export PATH=\"%s:$PATH\"\n", binDir)
 				}

@@ -15,6 +15,8 @@ Releases must be served over `https` and carry a checksum, or guppy refuses to i
 
 # Getting started
 
+Grab a binary from the [releases page](https://github.com/jaredhaight/guppy/releases), or build from source with `go build ./cmd/guppy`. Guppy's own releases carry a signed provenance attestation — see [Installation](USAGE.md#installation) for how to check it.
+
 Add the bin folder to your PATH:
 
 ```bash
@@ -45,7 +47,7 @@ source <(guppy completion bash)   # or zsh, fish, powershell
 | `guppy check [app...]` | Report what's available without installing |
 | `guppy add <owner>/<repo>` | Start managing an app without installing it |
 | `guppy list` | Show managed apps and their versions |
-| `guppy remove <app>` | Remove an app and everything guppy installed for it |
+| `guppy remove <app>` | Remove an app and everything guppy installed for it (alias: `rm`) |
 | `guppy bin` | Print the folder guppy links binaries into |
 | `guppy completion <shell>` | Print a shell completion script |
 | `guppy version` | Print guppy's version |
