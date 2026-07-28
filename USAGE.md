@@ -1,6 +1,6 @@
 # Guppy Usage Guide
 
-Guppy manages applications published as GitHub releases or served from your own web server. It checks for new versions, downloads and verifies them, installs them, and links their binaries into a folder on your PATH.
+Guppy manages applications published as GitHub releases. It checks for new versions, downloads and verifies them, installs them, and links their binaries into a folder on your PATH.
 
 ## Installation
 
@@ -53,19 +53,59 @@ Both locations can be overridden with the `GUPPY_CONFIG_DIR` and `GUPPY_DATA_DIR
 
 ## Commands
 
-### guppy [app...]
+Running `guppy` on its own prints help. The three commands that do the work are deliberately separate: `add` writes an app's config, `install` installs an app, and `update` updates the apps you already have.
+
+### guppy install
+
+Installs one app, named either as `owner/repo` or as an app you've already added.
+
+Given `owner/repo`, guppy writes the config and installs it in a single step:
+
+```bash
+guppy install BurntSushi/ripgrep --applier archive --bin rg
+```
+
+Given the name of an app you've already added, it just installs it:
+
+```bash
+guppy install ripgrep
+```
+
+It takes the same flags as [`guppy add`](#guppy-add), which describe the app being added — so they only make sense with the `owner/repo` form.
+
+If the app already has a config, `install` says so rather than overwriting it, and points you at `guppy update`.
+
+### guppy update [app...]
 
 Updates apps. With no arguments it updates every app you've added.
 
 ```bash
-guppy
+guppy update
 ```
 
 ```bash
-guppy ripgrep fd
+guppy update ripgrep fd
 ```
 
 If one app fails, the rest still run, and guppy reports how many failed at the end.
+
+Guppy compares the installed version against the latest release, so updating an app you've added but never installed installs it.
+
+#### --interval, -i
+
+Keep running, checking at a fixed interval instead of exiting after one pass. Accepts `15m`, `1h`, `1d`, or `HH:MM:SS`.
+
+```bash
+guppy update --interval 6h
+```
+
+```bash
+guppy update --interval 01:30:00
+```
+
+Press Ctrl+C to stop — that also aborts a download in progress rather than waiting for it to finish. Guppy stops cleanly on SIGTERM too, so it works under systemd.
+
+The shortest accepted interval is 5 minutes. Each tick costs at least one API call per app, and GitHub allows 60 an hour unauthenticated, so a shorter interval gets you rate-limited rather than updated.
 
 ### guppy check [app...]
 
@@ -82,16 +122,10 @@ ripgrep: 🎉 14.1.1 available (current 14.0.3)
 
 ### guppy add
 
-Starts managing an app. For a GitHub repository:
+Starts managing an app, without downloading anything. Use this when you want to edit the config before the first install; otherwise `guppy install` does both at once.
 
 ```bash
 guppy add BurntSushi/ripgrep --applier archive --bin rg
-```
-
-For an HTTP release feed:
-
-```bash
-guppy add --url https://example.com/releases.json --name myapp
 ```
 
 | Flag | Purpose |
@@ -101,7 +135,6 @@ guppy add --url https://example.com/releases.json --name myapp
 | `--bin` | A binary to link into the bin folder. Repeatable |
 | `--asset` | Which release asset to download, by name or pattern |
 | `--token` | GitHub token, for private repos or higher rate limits. Prefer `GH_TOKEN` in the environment |
-| `--url` | Release feed URL, for the http provider |
 | `--pre-install` | Shell command to run before installing. Repeatable |
 | `--post-install` | Shell command to run after installing. Repeatable |
 
@@ -139,6 +172,26 @@ export PATH="$(guppy bin):$PATH"
 
 Prints guppy's own version.
 
+### guppy completion
+
+Prints a shell completion script. Guppy completes subcommands, flags, `--applier` values, and the names of the apps you manage.
+
+```bash
+# bash — add to ~/.bashrc
+source <(guppy completion bash)
+
+# zsh — add to ~/.zshrc, before compinit
+source <(guppy completion zsh)
+
+# fish
+guppy completion fish > ~/.config/fish/completions/guppy.fish
+
+# powershell — add to $PROFILE
+guppy completion powershell | Out-String | Invoke-Expression
+```
+
+Run `guppy completion <shell> --help` for the per-shell details, including how to install it system-wide rather than per user.
+
 ## Command-Line Flags
 
 ### --config-dir
@@ -149,29 +202,15 @@ Use a different config folder. Handy for keeping separate sets of apps.
 guppy --config-dir ~/work-tools list
 ```
 
+Completion honors this too, so `guppy --config-dir ~/work-tools update <TAB>` offers that folder's apps.
+
 ### --debug, -d
 
 Enable debug logging, written to stderr.
 
 ```bash
-guppy --debug ripgrep
+guppy --debug update ripgrep
 ```
-
-### --interval, -i
-
-Keep running, checking at a fixed interval instead of exiting after one pass. Accepts `15m`, `1h`, `1d`, or `HH:MM:SS`.
-
-```bash
-guppy --interval 6h
-```
-
-```bash
-guppy --interval 01:30:00
-```
-
-Press Ctrl+C to stop — that also aborts a download in progress rather than waiting for it to finish. Guppy stops cleanly on SIGTERM too, so it works under systemd.
-
-The shortest accepted interval is 5 minutes. Each tick costs at least one API call per app, and GitHub allows 60 an hour unauthenticated, so a shorter interval gets you rate-limited rather than updated.
 
 ## Configuration
 
@@ -195,9 +234,7 @@ post_install:
 
 ### repository
 
-Where releases come from.
-
-For `type: github`:
+Where releases come from. `type` is `github`, which is also the default and currently the only accepted value.
 
 | Field | Required | Purpose |
 |---|---|---|
@@ -205,12 +242,6 @@ For `type: github`:
 | `repo` | yes | Repository name |
 | `token` | no | Personal access token, for private repos or higher rate limits. Overrides `GH_TOKEN`/`GITHUB_TOKEN` from the environment |
 | `asset_name` | no | Which asset to download. Defaults to the first one. See below |
-
-For `type: http`:
-
-| Field | Required | Purpose |
-|---|---|---|
-| `url` | yes | URL of the releases JSON feed |
 
 #### asset_name
 
@@ -257,7 +288,7 @@ Binaries are linked, not copied, and guppy makes them executable — archives do
 
 ### allow_unverified
 
-Drops guppy's integrity requirements for this one app: plain-HTTP URLs are accepted, and so are releases that ship no checksum. Guppy warns on every unverified install. Defaults to `false`. See [Verification](#verification).
+Drops guppy's integrity requirements for this one app: releases that ship no checksum are accepted, and so are plain-HTTP artifact URLs. Guppy warns on every unverified install. Defaults to `false`. See [Verification](#verification).
 
 ### pre_install and post_install
 
@@ -299,13 +330,19 @@ guppy add jaredhaight/guppy --asset guppy-linux-amd64
 ```
 
 ```bash
-guppy guppy
+guppy install guppy
+```
+
+Or in one step:
+
+```bash
+guppy install jaredhaight/guppy --asset guppy-linux-amd64
 ```
 
 ### Example 2: An archive with a nested binary
 
 ```bash
-guppy add BurntSushi/ripgrep --applier archive --bin rg --asset 'x86_64-unknown-linux-musl\.tar\.gz$'
+guppy install BurntSushi/ripgrep --applier archive --bin rg --asset 'x86_64-unknown-linux-musl\.tar\.gz$'
 ```
 
 ### Example 3: A private repository
@@ -342,35 +379,10 @@ post_install:
   - systemctl --user start myservice
 ```
 
-### Example 5: An HTTP release feed
+### Example 5: Continuous monitoring
 
 ```bash
-guppy add --url https://example.com/releases.json --name myapp --applier archive --bin myapp
-```
-
-The feed is a JSON array:
-
-```json
-[
-  {
-    "version": "1.0.0",
-    "url": "https://example.com/myapp-1.0.0.tar.gz",
-    "sha256": "997c3ad2cd376d4cc609c3879b831fcfcf785cea14b427c8d7bfc40f77e0c3eb"
-  },
-  {
-    "version": "1.1.0",
-    "url": "https://example.com/myapp-1.1.0.tar.gz",
-    "sha256": "a1b2c3d4e5f6789012345678901234567890123456789012345678901234567a"
-  }
-]
-```
-
-Guppy picks the highest version, so order doesn't matter.
-
-### Example 6: Continuous monitoring
-
-```bash
-guppy --interval 6h
+guppy update --interval 6h
 ```
 
 As a systemd user service:
@@ -380,7 +392,7 @@ As a systemd user service:
 Description=Guppy update monitor
 
 [Service]
-ExecStart=/usr/local/bin/guppy --interval 6h
+ExecStart=/usr/local/bin/guppy update --interval 6h
 Restart=on-failure
 
 [Install]
@@ -391,28 +403,28 @@ WantedBy=default.target
 
 Guppy installs binaries onto your `PATH`, so it refuses to install anything it can't verify.
 
-- **GitHub** supplies a SHA256 digest for release assets automatically.
-- **HTTP** feeds may include `md5`, `sha1` and/or `sha256`. Guppy uses the strongest one available (sha256 > sha1 > md5), and says so when it had to fall back — MD5 and SHA-1 are broken against deliberate collisions, so an attacker who can choose the artifact can also choose one that matches.
+GitHub supplies a SHA256 digest for release assets, but only when the publisher's tooling produced one, so plenty of real releases arrive without a checksum.
 
 Two requirements, both enforced before anything is downloaded:
 
-1. **URLs must be `https`.** This covers both the feed URL and the artifact URL the feed points at — they're set separately, so a secure feed can still hand back an insecure download. `localhost` and loopback addresses are exempt.
+1. **The artifact URL must be `https`.** A release names its own artifact URL, independently of the API it came from, so this is checked against that URL rather than assumed. `localhost` and loopback addresses are exempt.
 2. **The release must carry a checksum.** A download that fails verification is deleted and the install stops.
 
 Both matter together rather than separately: over plain HTTP, anyone who can rewrite the download can rewrite the checksum alongside it, so verification proves nothing.
 
 ### Overriding this
 
-If you're installing from a source that can't meet either requirement, set `allow_unverified` on that app:
+If you're installing a release that can't meet either requirement — most often one published with no digest at all — set `allow_unverified` on that app:
 
 ```yaml
 repository:
-  type: http
-  url: http://internal-host.lan/releases.json
+  type: github
+  owner: myorg
+  repo: internal-tool
 allow_unverified: true
 ```
 
-Guppy will then install from plain-HTTP URLs and accept releases with no checksum, printing a warning each time it does. It's per app, never global — you're saying you trust that specific source, not switching the protection off.
+Guppy will then accept releases with no checksum, and plain-HTTP artifact URLs, printing a warning each time it does. It's per app, never global — you're saying you trust that specific source, not switching the protection off.
 
 ## Supported Archive Formats
 
