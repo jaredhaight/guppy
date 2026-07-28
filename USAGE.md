@@ -100,7 +100,7 @@ guppy add --url https://example.com/releases.json --name myapp
 | `--applier` | `binary` (default) or `archive` |
 | `--bin` | A binary to link into the bin folder. Repeatable |
 | `--asset` | Which release asset to download, by name or pattern |
-| `--token` | GitHub token, for private repos or higher rate limits |
+| `--token` | GitHub token, for private repos or higher rate limits. Prefer `GH_TOKEN` in the environment |
 | `--url` | Release feed URL, for the http provider |
 | `--pre-install` | Shell command to run before installing. Repeatable |
 | `--post-install` | Shell command to run after installing. Repeatable |
@@ -169,7 +169,9 @@ guppy --interval 6h
 guppy --interval 01:30:00
 ```
 
-Press Ctrl+C to stop. Guppy also stops cleanly on SIGTERM, so it works under systemd.
+Press Ctrl+C to stop — that also aborts a download in progress rather than waiting for it to finish. Guppy stops cleanly on SIGTERM too, so it works under systemd.
+
+The shortest accepted interval is 5 minutes. Each tick costs at least one API call per app, and GitHub allows 60 an hour unauthenticated, so a shorter interval gets you rate-limited rather than updated.
 
 ## Configuration
 
@@ -201,7 +203,7 @@ For `type: github`:
 |---|---|---|
 | `owner` | yes | Repository owner |
 | `repo` | yes | Repository name |
-| `token` | no | Personal access token, for private repos or higher rate limits |
+| `token` | no | Personal access token, for private repos or higher rate limits. Overrides `GH_TOKEN`/`GITHUB_TOKEN` from the environment |
 | `asset_name` | no | Which asset to download. Defaults to the first one. See below |
 
 For `type: http`:
@@ -312,7 +314,14 @@ guppy add BurntSushi/ripgrep --applier archive --bin rg --asset 'x86_64-unknown-
 guppy add myorg/internal-tool --token github_pat_xxxxxxxxxxxx
 ```
 
-Prefer editing `token` into the config file over passing it on the command line, so it doesn't land in your shell history.
+Better still, don't put it anywhere on disk. Guppy reads `GUPPY_GITHUB_TOKEN`, `GH_TOKEN` and `GITHUB_TOKEN` (in that order) when an app config has no `token` of its own, so the same variable the GitHub CLI and CI already set works here:
+
+```bash
+export GH_TOKEN=github_pat_xxxxxxxxxxxx
+guppy add myorg/internal-tool
+```
+
+A `token` in the config file takes precedence, since it's chosen per app. Config files are written `0600` because of it. `--token` still works but leaves the credential in your shell history, so prefer the environment.
 
 ### Example 4: A service that needs restarting
 
@@ -383,7 +392,7 @@ WantedBy=default.target
 Guppy installs binaries onto your `PATH`, so it refuses to install anything it can't verify.
 
 - **GitHub** supplies a SHA256 digest for release assets automatically.
-- **HTTP** feeds may include `md5`, `sha1` and/or `sha256`. Guppy uses the strongest one available (sha256 > sha1 > md5).
+- **HTTP** feeds may include `md5`, `sha1` and/or `sha256`. Guppy uses the strongest one available (sha256 > sha1 > md5), and says so when it had to fall back — MD5 and SHA-1 are broken against deliberate collisions, so an attacker who can choose the artifact can also choose one that matches.
 
 Two requirements, both enforced before anything is downloaded:
 

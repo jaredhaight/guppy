@@ -194,7 +194,7 @@ func TestUnlinkBins(t *testing.T) {
 		}
 	}
 
-	if err := UnlinkBins(binDir, []string{"rg", "sub/fd"}); err != nil {
+	if err := UnlinkBins(binDir, installDir, []string{"rg", "sub/fd"}); err != nil {
 		t.Fatalf("UnlinkBins() error: %v", err)
 	}
 
@@ -205,7 +205,46 @@ func TestUnlinkBins(t *testing.T) {
 	}
 
 	// Removing links that are already gone is not an error.
-	if err := UnlinkBins(binDir, []string{"rg"}); err != nil {
+	if err := UnlinkBins(binDir, installDir, []string{"rg"}); err != nil {
 		t.Errorf("UnlinkBins() on missing links error: %v", err)
+	}
+}
+
+// Two apps can declare the same bin name. Removing one must not delete the
+// other's binary, which is what happened when the name alone decided.
+func TestUnlinkBinsLeavesAnotherAppsLink(t *testing.T) {
+	root := t.TempDir()
+	binDir := filepath.Join(root, "bin")
+
+	mine := filepath.Join(root, "apps", "mine")
+	theirs := filepath.Join(root, "apps", "theirs")
+	tree(t, mine, "tool")
+	tree(t, theirs, "tool")
+
+	// "theirs" installed last, so it owns bin/tool.
+	if _, err := LinkBin(binDir, filepath.Join(theirs, "tool"), "tool"); err != nil {
+		t.Fatalf("LinkBin() error: %v", err)
+	}
+
+	// Removing "mine" must leave it alone.
+	if err := UnlinkBins(binDir, mine, []string{"tool"}); err != nil {
+		t.Fatalf("UnlinkBins() error: %v", err)
+	}
+
+	link := filepath.Join(binDir, "tool")
+	target, err := os.Readlink(link)
+	if err != nil {
+		t.Fatalf("UnlinkBins() removed another app's link: %v", err)
+	}
+	if target != filepath.Join(theirs, "tool") {
+		t.Errorf("link now points at %q, want it untouched at %q", target, filepath.Join(theirs, "tool"))
+	}
+
+	// The owner can still remove it.
+	if err := UnlinkBins(binDir, theirs, []string{"tool"}); err != nil {
+		t.Fatalf("UnlinkBins() by the owner error: %v", err)
+	}
+	if _, err := os.Lstat(link); !os.IsNotExist(err) {
+		t.Error("the owning app failed to remove its own link")
 	}
 }

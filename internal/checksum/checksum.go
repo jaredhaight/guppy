@@ -12,6 +12,24 @@ import (
 	"strings"
 )
 
+// Weak reports whether an algorithm is broken against deliberate collisions.
+// MD5 and SHA-1 are accepted for compatibility with existing releases.json
+// feeds, but an attacker who can pick the artifact can also pick a collision,
+// so a release verified this way is not really verified.
+func Weak(algorithm string) bool {
+	return algorithm == "md5" || algorithm == "sha1"
+}
+
+// Algorithm returns the algorithm named by a checksum in "algorithm:hexvalue"
+// form, or "" if it is malformed.
+func Algorithm(checksum string) string {
+	algorithm, _, found := strings.Cut(checksum, ":")
+	if !found {
+		return ""
+	}
+	return algorithm
+}
+
 // Verify checks a file against a checksum in "algorithm:hexvalue" form, e.g.
 // "sha256:abc123...". Supported algorithms are sha256, sha1 and md5.
 //

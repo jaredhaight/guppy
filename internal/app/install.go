@@ -39,11 +39,33 @@ func (i *Installer) debugf(format string, args ...any) {
 	}
 }
 
+// githubTokenEnv are the environment variables consulted for a GitHub token
+// when the app config doesn't carry one, in order. Both are what the GitHub
+// CLI and most CI systems already set.
+var githubTokenEnv = []string{"GUPPY_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"}
+
+// githubToken returns the token to authenticate with.
+//
+// A token in the config file wins, since it is chosen per app. Otherwise the
+// environment is consulted, which keeps the credential out of a file on disk
+// and out of shell history — the two places --token used to leave it.
+func githubToken(configured string) string {
+	if configured != "" {
+		return configured
+	}
+	for _, key := range githubTokenEnv {
+		if v := os.Getenv(key); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
 // NewRepository builds the repository client an app's config describes.
 func NewRepository(a *config.App, debug bool) (repository.Repository, error) {
 	switch a.Repository.Type {
 	case "github":
-		repo := repository.NewGitHubRepository(a.Repository.Owner, a.Repository.Repo, a.Repository.Token)
+		repo := repository.NewGitHubRepository(a.Repository.Owner, a.Repository.Repo, githubToken(a.Repository.Token))
 		if a.Repository.AssetName != "" {
 			repo.SetAssetName(a.Repository.AssetName)
 		}
@@ -155,7 +177,12 @@ func (i *Installer) Install(ctx context.Context, a *config.App) error {
 			_ = os.Remove(downloadPath)
 			return fmt.Errorf("checksum verification failed - file may be corrupted")
 		}
-		i.printf("%s: ✓ checksum verified\n", a.Name())
+		if algorithm := checksum.Algorithm(latest.Checksum); checksum.Weak(algorithm) {
+			i.printf("%s: ✓ checksum verified (%s — weak; ask the publisher for sha256)\n",
+				a.Name(), algorithm)
+		} else {
+			i.printf("%s: ✓ checksum verified\n", a.Name())
+		}
 	} else {
 		// Only reachable with allow_unverified set. Say so on stdout: a
 		// warning nobody sees without --debug is not a warning.
@@ -228,12 +255,11 @@ func Remove(a *config.App) error {
 	if err != nil {
 		return err
 	}
-	if err := UnlinkBins(binDir, a.Binaries()); err != nil {
-		return err
-	}
-
 	installDir, err := config.InstallDir(a.Name())
 	if err != nil {
+		return err
+	}
+	if err := UnlinkBins(binDir, installDir, a.Binaries()); err != nil {
 		return err
 	}
 	if err := os.RemoveAll(installDir); err != nil {

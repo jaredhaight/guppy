@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -65,6 +66,37 @@ func (g *GitHubRepository) setAuth(req *http.Request) {
 	g.debugLog("Authorization header set (token redacted)")
 }
 
+// apiError turns a non-200 into something the user can act on. The raw body
+// for a rate-limit response is a wall of JSON that buries the one fact that
+// matters: wait, or authenticate.
+func (g *GitHubRepository) apiError(resp *http.Response) error {
+	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusTooManyRequests {
+		if resp.Header.Get("X-RateLimit-Remaining") == "0" {
+			msg := "GitHub API rate limit exceeded"
+			if reset := resetTime(resp.Header.Get("X-RateLimit-Reset")); !reset.IsZero() {
+				msg += fmt.Sprintf("; it resets at %s", reset.Local().Format("15:04:05"))
+			}
+			if g.Token == "" {
+				msg += ". Unauthenticated requests are limited to 60/hour — set GH_TOKEN or GITHUB_TOKEN to raise it"
+			}
+			return fmt.Errorf("%s", msg)
+		}
+	}
+
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
+	return fmt.Errorf("GitHub API returned status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+}
+
+// resetTime parses the X-RateLimit-Reset epoch header, returning the zero time
+// if it is absent or malformed.
+func resetTime(header string) time.Time {
+	seconds, err := strconv.ParseInt(header, 10, 64)
+	if err != nil {
+		return time.Time{}
+	}
+	return time.Unix(seconds, 0)
+}
+
 // githubAsset represents a single downloadable file attached to a release
 type githubAsset struct {
 	ID                 int64  `json:"id"`
@@ -103,8 +135,7 @@ func (g *GitHubRepository) GetLatestRelease(ctx context.Context) (*Release, erro
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("GitHub API returned status %d: %s", resp.StatusCode, string(body))
+		return nil, g.apiError(resp)
 	}
 
 	var ghRelease githubRelease

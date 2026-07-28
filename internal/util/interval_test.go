@@ -25,9 +25,9 @@ func TestParseInterval(t *testing.T) {
 			wantErr:  false,
 		},
 		{
-			name:     "30 seconds",
-			input:    "30s",
-			expected: 30 * time.Second,
+			name:     "exactly the minimum",
+			input:    "5m",
+			expected: MinInterval,
 			wantErr:  false,
 		},
 		{
@@ -90,6 +90,23 @@ func TestParseInterval(t *testing.T) {
 		{
 			name:    "Zero duration",
 			input:   "0s",
+			wantErr: true,
+		},
+		// Every tick costs an API call per app, so a too-short interval gets
+		// the user rate-limited rather than updated.
+		{
+			name:    "below the minimum",
+			input:   "30s",
+			wantErr: true,
+		},
+		{
+			name:    "just below the minimum",
+			input:   "4m59s",
+			wantErr: true,
+		},
+		{
+			name:    "below the minimum in HH:MM:SS form",
+			input:   "00:01:00",
 			wantErr: true,
 		},
 	}
