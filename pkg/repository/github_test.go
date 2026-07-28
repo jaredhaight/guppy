@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -18,9 +19,9 @@ func TestParseDigest(t *testing.T) {
 		expected string
 	}{
 		{
-			name:     "valid sha256 digest",
+			name:     "valid sha256 digest keeps its algorithm prefix",
 			digest:   "sha256:bb3dcd74ea4b8b1c354ef53f0c758a0d75ee8233c2fa34165cdc85bbfc812691",
-			expected: "bb3dcd74ea4b8b1c354ef53f0c758a0d75ee8233c2fa34165cdc85bbfc812691",
+			expected: "sha256:bb3dcd74ea4b8b1c354ef53f0c758a0d75ee8233c2fa34165cdc85bbfc812691",
 		},
 		{
 			name:     "empty digest",
@@ -40,7 +41,12 @@ func TestParseDigest(t *testing.T) {
 		{
 			name:     "valid digest with uppercase",
 			digest:   "sha256:BB3DCD74EA4B8B1C354EF53F0C758A0D75EE8233C2FA34165CDC85BBFC812691",
-			expected: "BB3DCD74EA4B8B1C354EF53F0C758A0D75EE8233C2FA34165CDC85BBFC812691",
+			expected: "sha256:BB3DCD74EA4B8B1C354EF53F0C758A0D75EE8233C2FA34165CDC85BBFC812691",
+		},
+		{
+			name:     "algorithm present but value empty",
+			digest:   "sha256:",
+			expected: "",
 		},
 	}
 
@@ -56,23 +62,18 @@ func TestParseDigest(t *testing.T) {
 
 func TestConvertGitHubRelease(t *testing.T) {
 	tests := []struct {
-		name        string
-		ghRelease   *githubRelease
-		assetName   string
-		wantErr     bool
-		wantVersion string
+		name         string
+		ghRelease    *githubRelease
+		assetName    string
+		wantErr      bool
+		wantVersion  string
 		wantChecksum string
 	}{
 		{
 			name: "release with valid checksum",
 			ghRelease: &githubRelease{
 				TagName: "v1.0.0",
-				Assets: []struct {
-					ID                 int64  `json:"id"`
-					Name               string `json:"name"`
-					BrowserDownloadURL string `json:"browser_download_url"`
-					Digest             string `json:"digest"`
-				}{
+				Assets: []githubAsset{
 					{
 						ID:                 123,
 						Name:               "test-binary",
@@ -83,18 +84,13 @@ func TestConvertGitHubRelease(t *testing.T) {
 			},
 			wantErr:      false,
 			wantVersion:  "v1.0.0",
-			wantChecksum: "abc123def456",
+			wantChecksum: "sha256:abc123def456",
 		},
 		{
 			name: "release without checksum",
 			ghRelease: &githubRelease{
 				TagName: "v1.0.0",
-				Assets: []struct {
-					ID                 int64  `json:"id"`
-					Name               string `json:"name"`
-					BrowserDownloadURL string `json:"browser_download_url"`
-					Digest             string `json:"digest"`
-				}{
+				Assets: []githubAsset{
 					{
 						ID:                 123,
 						Name:               "test-binary",
@@ -111,12 +107,7 @@ func TestConvertGitHubRelease(t *testing.T) {
 			name: "release with no assets",
 			ghRelease: &githubRelease{
 				TagName: "v1.0.0",
-				Assets:  []struct {
-					ID                 int64  `json:"id"`
-					Name               string `json:"name"`
-					BrowserDownloadURL string `json:"browser_download_url"`
-					Digest             string `json:"digest"`
-				}{},
+				Assets:  []githubAsset{},
 			},
 			wantErr: true,
 		},
@@ -124,12 +115,7 @@ func TestConvertGitHubRelease(t *testing.T) {
 			name: "specific asset with checksum",
 			ghRelease: &githubRelease{
 				TagName: "v1.0.0",
-				Assets: []struct {
-					ID                 int64  `json:"id"`
-					Name               string `json:"name"`
-					BrowserDownloadURL string `json:"browser_download_url"`
-					Digest             string `json:"digest"`
-				}{
+				Assets: []githubAsset{
 					{
 						ID:                 123,
 						Name:               "wrong-binary",
@@ -147,7 +133,7 @@ func TestConvertGitHubRelease(t *testing.T) {
 			assetName:    "correct-binary",
 			wantErr:      false,
 			wantVersion:  "v1.0.0",
-			wantChecksum: "correcthash",
+			wantChecksum: "sha256:correcthash",
 		},
 	}
 
@@ -185,14 +171,14 @@ func TestConvertGitHubRelease(t *testing.T) {
 
 func TestGitHubRepository_GetLatestRelease(t *testing.T) {
 	tests := []struct {
-		name           string
-		responseStatus int
-		responseBody   interface{}
-		assetName      string
-		token          string
-		wantErr        bool
-		wantVersion    string
-		wantChecksum   string
+		name            string
+		responseStatus  int
+		responseBody    interface{}
+		assetName       string
+		token           string
+		wantErr         bool
+		wantVersion     string
+		wantChecksum    string
 		checkAuthHeader bool
 	}{
 		{
@@ -202,12 +188,7 @@ func TestGitHubRepository_GetLatestRelease(t *testing.T) {
 				TagName:     "v1.2.3",
 				Name:        "Release v1.2.3",
 				PublishedAt: time.Now(),
-				Assets: []struct {
-					ID                 int64  `json:"id"`
-					Name               string `json:"name"`
-					BrowserDownloadURL string `json:"browser_download_url"`
-					Digest             string `json:"digest"`
-				}{
+				Assets: []githubAsset{
 					{
 						ID:                 456,
 						Name:               "test-binary",
@@ -218,7 +199,7 @@ func TestGitHubRepository_GetLatestRelease(t *testing.T) {
 			},
 			wantErr:      false,
 			wantVersion:  "v1.2.3",
-			wantChecksum: "abc123def456",
+			wantChecksum: "sha256:abc123def456",
 		},
 		{
 			name:           "successful fetch without checksum",
@@ -227,12 +208,7 @@ func TestGitHubRepository_GetLatestRelease(t *testing.T) {
 				TagName:     "v2.0.0",
 				Name:        "Release v2.0.0",
 				PublishedAt: time.Now(),
-				Assets: []struct {
-					ID                 int64  `json:"id"`
-					Name               string `json:"name"`
-					BrowserDownloadURL string `json:"browser_download_url"`
-					Digest             string `json:"digest"`
-				}{
+				Assets: []githubAsset{
 					{
 						ID:                 789,
 						Name:               "app",
@@ -288,12 +264,7 @@ func TestGitHubRepository_GetLatestRelease(t *testing.T) {
 				TagName:     "v1.0.0",
 				Name:        "Empty Release",
 				PublishedAt: time.Now(),
-				Assets:      []struct {
-					ID                 int64  `json:"id"`
-					Name               string `json:"name"`
-					BrowserDownloadURL string `json:"browser_download_url"`
-					Digest             string `json:"digest"`
-				}{},
+				Assets:      []githubAsset{},
 			},
 			wantErr: true,
 		},
@@ -304,12 +275,7 @@ func TestGitHubRepository_GetLatestRelease(t *testing.T) {
 				TagName:     "v1.5.0",
 				Name:        "Release v1.5.0",
 				PublishedAt: time.Now(),
-				Assets: []struct {
-					ID                 int64  `json:"id"`
-					Name               string `json:"name"`
-					BrowserDownloadURL string `json:"browser_download_url"`
-					Digest             string `json:"digest"`
-				}{
+				Assets: []githubAsset{
 					{
 						ID:                 100,
 						Name:               "app-linux",
@@ -327,7 +293,7 @@ func TestGitHubRepository_GetLatestRelease(t *testing.T) {
 			assetName:    "app-darwin",
 			wantErr:      false,
 			wantVersion:  "v1.5.0",
-			wantChecksum: "darwin456",
+			wantChecksum: "sha256:darwin456",
 		},
 		{
 			name:           "authenticated request with token",
@@ -336,12 +302,7 @@ func TestGitHubRepository_GetLatestRelease(t *testing.T) {
 				TagName:     "v3.0.0",
 				Name:        "Release v3.0.0",
 				PublishedAt: time.Now(),
-				Assets: []struct {
-					ID                 int64  `json:"id"`
-					Name               string `json:"name"`
-					BrowserDownloadURL string `json:"browser_download_url"`
-					Digest             string `json:"digest"`
-				}{
+				Assets: []githubAsset{
 					{
 						ID:                 999,
 						Name:               "private-app",
@@ -353,7 +314,7 @@ func TestGitHubRepository_GetLatestRelease(t *testing.T) {
 			token:           "ghp_testtoken123",
 			wantErr:         false,
 			wantVersion:     "v3.0.0",
-			wantChecksum:    "private789",
+			wantChecksum:    "sha256:private789",
 			checkAuthHeader: true,
 		},
 	}
@@ -460,12 +421,7 @@ func TestGitHubRepository_GetRelease(t *testing.T) {
 				TagName:     "v1.0.0",
 				Name:        "Release v1.0.0",
 				PublishedAt: time.Now(),
-				Assets: []struct {
-					ID                 int64  `json:"id"`
-					Name               string `json:"name"`
-					BrowserDownloadURL string `json:"browser_download_url"`
-					Digest             string `json:"digest"`
-				}{
+				Assets: []githubAsset{
 					{
 						ID:                 123,
 						Name:               "app",
@@ -486,12 +442,7 @@ func TestGitHubRepository_GetRelease(t *testing.T) {
 				TagName:     "v2.5.0",
 				Name:        "Release v2.5.0",
 				PublishedAt: time.Now(),
-				Assets: []struct {
-					ID                 int64  `json:"id"`
-					Name               string `json:"name"`
-					BrowserDownloadURL string `json:"browser_download_url"`
-					Digest             string `json:"digest"`
-				}{
+				Assets: []githubAsset{
 					{
 						ID:                 456,
 						Name:               "app",
@@ -779,4 +730,103 @@ func (m *mockTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 
 	// Use default transport
 	return http.DefaultTransport.RoundTrip(newReq)
+}
+
+func TestSelectAsset(t *testing.T) {
+	assets := []githubAsset{
+		{ID: 1, Name: "ripgrep-15.2.0-aarch64-apple-darwin.tar.gz"},
+		{ID: 2, Name: "ripgrep-15.2.0-aarch64-apple-darwin.tar.gz.sha256"},
+		{ID: 3, Name: "ripgrep-15.2.0-x86_64-unknown-linux-musl.tar.gz"},
+		{ID: 4, Name: "ripgrep-15.2.0-aarch64-pc-windows-msvc.zip"},
+	}
+
+	tests := []struct {
+		name      string
+		assetName string
+		wantID    int64
+		wantErr   string
+	}{
+		{
+			name:      "exact filename",
+			assetName: "ripgrep-15.2.0-aarch64-apple-darwin.tar.gz",
+			wantID:    1,
+		},
+		{
+			// The point of pattern support: this keeps working when the
+			// version in the filename changes.
+			name:      "pattern spanning the version",
+			assetName: `ripgrep-.*-aarch64-apple-darwin\.tar\.gz$`,
+			wantID:    1,
+		},
+		{
+			name:      "pattern anchored to the end excludes the sha256 sidecar",
+			assetName: `aarch64-apple-darwin\.tar\.gz$`,
+			wantID:    1,
+		},
+		{
+			name:      "pattern matching a zip",
+			assetName: `windows-msvc\.zip$`,
+			wantID:    4,
+		},
+		{
+			name:      "no match names the available assets",
+			assetName: "does-not-exist",
+			wantErr:   "not found in release",
+		},
+		{
+			name:      "ambiguous pattern is an error, not a silent pick",
+			assetName: `apple-darwin`,
+			wantErr:   "matches 2 assets",
+		},
+		{
+			name:      "invalid pattern is reported clearly",
+			assetName: "ripgrep-[",
+			wantErr:   "not a valid pattern",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			g := NewGitHubRepository("owner", "repo", "")
+			g.SetAssetName(tt.assetName)
+
+			asset, err := g.selectAsset(assets)
+
+			if tt.wantErr != "" {
+				if err == nil {
+					t.Fatalf("selectAsset() succeeded, want error mentioning %q", tt.wantErr)
+				}
+				if !strings.Contains(err.Error(), tt.wantErr) {
+					t.Errorf("selectAsset() error = %v, want it to mention %q", err, tt.wantErr)
+				}
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("selectAsset() error: %v", err)
+			}
+			if asset.ID != tt.wantID {
+				t.Errorf("selectAsset() = asset %d (%s), want asset %d", asset.ID, asset.Name, tt.wantID)
+			}
+		})
+	}
+}
+
+// An exact filename must win even when it would also match as a pattern.
+func TestSelectAssetPrefersExactMatch(t *testing.T) {
+	assets := []githubAsset{
+		{ID: 1, Name: "app-linux"},
+		{ID: 2, Name: "app-linux-extra"},
+	}
+
+	g := NewGitHubRepository("owner", "repo", "")
+	g.SetAssetName("app-linux")
+
+	asset, err := g.selectAsset(assets)
+	if err != nil {
+		t.Fatalf("selectAsset() error: %v", err)
+	}
+	if asset.ID != 1 {
+		t.Errorf("selectAsset() = asset %d, want the exact match (1)", asset.ID)
+	}
 }

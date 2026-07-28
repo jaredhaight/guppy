@@ -1,27 +1,24 @@
 package main
 
 import (
-	"bufio"
 	"fmt"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
 
+	"github.com/jaredhaight/guppy/internal/app"
 	"github.com/jaredhaight/guppy/internal/config"
 	"github.com/jaredhaight/guppy/internal/util"
-	"github.com/jaredhaight/guppy/pkg/applier"
-	"github.com/jaredhaight/guppy/pkg/checksum"
-	"github.com/jaredhaight/guppy/pkg/repository"
 	"github.com/spf13/cobra"
 )
 
 var (
 	Version      = "dev"
-	cfgFile      string
-	cfg          *config.Config
+	configDir    string
 	debug        bool
 	intervalFlag string
 )
@@ -34,34 +31,28 @@ func main() {
 }
 
 // debugLog prints a debug message if debug mode is enabled
-func debugLog(format string, args ...interface{}) {
+func debugLog(format string, args ...any) {
 	if debug {
 		fmt.Fprintf(os.Stderr, "[DEBUG] "+format+"\n", args...)
 	}
 }
 
 var rootCmd = &cobra.Command{
-	Use:           "guppy",
-	Short:         "Guppy is a software update helper",
-	Long:          `Guppy checks for new releases, downloads them, and applies the new version.`,
+	Use:   "guppy [app...]",
+	Short: "Guppy is a software update helper",
+	Long: `Guppy checks for new releases of the applications it manages, downloads
+them, and installs their binaries into a folder on your PATH.
+
+With no arguments it updates every configured app.`,
 	SilenceUsage:  true,
 	SilenceErrors: true,
+	Args:          cobra.ArbitraryArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if err := loadConfig(); err != nil {
-			return err
-		}
-
-		repo, err := createRepository()
-		if err != nil {
-			return err
-		}
-
 		// If no interval flag is set, run once
 		if intervalFlag == "" {
-			return performUpdate(repo)
+			return updateApps(args)
 		}
 
-		// Parse the interval
 		interval, err := util.ParseInterval(intervalFlag)
 		if err != nil {
 			return fmt.Errorf("invalid interval: %w", err)
@@ -71,19 +62,16 @@ var rootCmd = &cobra.Command{
 		sigChan := make(chan os.Signal, 1)
 		signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
-		// Create ticker for the interval
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 
 		fmt.Printf("Starting update monitoring (checking every %s). Press Ctrl+C to stop.\n", interval)
 
-		// Run the first check immediately
-		if err := performUpdate(repo); err != nil {
+		if err := updateApps(args); err != nil {
 			fmt.Printf("Error during update check: %v\n", err)
 			fmt.Println("Will retry at next interval...")
 		}
 
-		// Main loop
 		for {
 			select {
 			case <-sigChan:
@@ -91,7 +79,7 @@ var rootCmd = &cobra.Command{
 				return nil
 			case <-ticker.C:
 				fmt.Printf("\n[%s] Running scheduled update check...\n", time.Now().Format("2006-01-02 15:04:05"))
-				if err := performUpdate(repo); err != nil {
+				if err := updateApps(args); err != nil {
 					fmt.Printf("Error during update check: %v\n", err)
 					fmt.Println("Will retry at next interval...")
 				}
@@ -101,25 +89,83 @@ var rootCmd = &cobra.Command{
 }
 
 var checkCmd = &cobra.Command{
-	Use:   "check",
-	Short: "Check for available updates",
+	Use:   "check [app...]",
+	Short: "Check for available updates without installing them",
+	Args:  cobra.ArbitraryArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		if err := loadConfig(); err != nil {
-			return err
-		}
-
-		repo, err := createRepository()
+		apps, err := resolveApps(args)
 		if err != nil {
 			return err
 		}
 
-		return checkForUpdates(repo)
+		return forEachApp(apps, func(a *config.App) error {
+			installer, err := newInstaller(a)
+			if err != nil {
+				return err
+			}
+			return installer.Check(a)
+		})
+	},
+}
+
+var listCmd = &cobra.Command{
+	Use:   "list",
+	Short: "List managed applications",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		names, err := config.ListApps()
+		if err != nil {
+			return err
+		}
+
+		if len(names) == 0 {
+			dir, _ := config.AppsDir()
+			fmt.Printf("No apps configured. Add one with:\n\n  guppy add <owner>/<repo>\n\nConfigs live in %s\n", dir)
+			return nil
+		}
+
+		fmt.Printf("%-24s %-14s %s\n", "APP", "VERSION", "SOURCE")
+		for _, name := range names {
+			a, err := config.LoadApp(name)
+			if err != nil {
+				fmt.Printf("%-24s %-14s %v\n", name, "?", err)
+				continue
+			}
+
+			version := a.CurrentVersion
+			if version == "" {
+				version = "-"
+			}
+
+			source := a.Repository.URL
+			if a.Repository.Type == "github" {
+				source = a.Repository.Owner + "/" + a.Repository.Repo
+			}
+
+			fmt.Printf("%-24s %-14s %s\n", name, version, source)
+		}
+		return nil
+	},
+}
+
+var binCmd = &cobra.Command{
+	Use:   "bin",
+	Short: "Print the directory guppy links binaries into",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		dir, err := config.BinDir()
+		if err != nil {
+			return err
+		}
+		fmt.Println(dir)
+		return nil
 	},
 }
 
 var versionCmd = &cobra.Command{
 	Use:   "version",
 	Short: "Show guppy version",
+	Args:  cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {
 		fmt.Printf("Guppy Software Updater\n")
 		fmt.Print("https://www.github.com/jaredhaight/guppy\n")
@@ -127,274 +173,262 @@ var versionCmd = &cobra.Command{
 	},
 }
 
-var initCmd = &cobra.Command{
-	Use:   "init [type]",
-	Short: "Create a template configuration file (type: github or http)",
-	Args:  cobra.MaximumNArgs(1),
+var (
+	addName        string
+	addApplier     string
+	addBin         []string
+	addAsset       string
+	addToken       string
+	addURL         string
+	addPreInstall  []string
+	addPostInstall []string
+)
+
+var addCmd = &cobra.Command{
+	Use:   "add [owner/repo]",
+	Short: "Add an application for guppy to manage",
+	Long: `Add an application for guppy to manage.
+
+GitHub releases:
+  guppy add BurntSushi/ripgrep --applier archive --bin rg
+
+An HTTP releases.json feed:
+  guppy add --url https://example.com/releases.json --name myapp`,
+	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		configPath := cfgFile
-		if configPath == "" {
-			configPath = config.GetDefaultConfigPath()
+		a, name, err := buildApp(args)
+		if err != nil {
+			return err
 		}
 
-		// Check if config file already exists
-		if _, err := os.Stat(configPath); err == nil {
-			return fmt.Errorf("config file already exists at %s", configPath)
+		if _, err := config.AppPath(name); err == nil {
+			return fmt.Errorf("app %q already exists", name)
 		}
 
-		// Determine repository type
-		var repoType string
-		if len(args) == 0 {
-			// Interactive prompt
-			fmt.Println("Select repository type:")
-			fmt.Println("  1. github")
-			fmt.Println("  2. http")
-			fmt.Print("Enter choice (1 or 2): ")
+		if err := a.Validate(); err != nil {
+			return err
+		}
 
-			reader := bufio.NewReader(os.Stdin)
-			input, err := reader.ReadString('\n')
-			if err != nil {
-				return fmt.Errorf("error reading input: %w", err)
-			}
+		if err := a.Save(); err != nil {
+			return err
+		}
 
-			input = strings.TrimSpace(input)
-			switch input {
-			case "1", "github":
-				repoType = "github"
-			case "2", "http":
-				repoType = "http"
-			default:
-				return fmt.Errorf("invalid choice: %s\nUsage: guppy init [github|http]", input)
-			}
-		} else {
-			// Validate argument
-			repoType = strings.ToLower(args[0])
-			if repoType != "github" && repoType != "http" {
-				return fmt.Errorf("invalid repository type: %s\nValid types: github, http", args[0])
+		fmt.Printf("✓ Added %s (%s)\n", name, a.Path())
+
+		binDir, err := config.BinDir()
+		if err == nil {
+			fmt.Printf("\nRun 'guppy %s' to install it. Binaries are linked into:\n  %s\n", name, binDir)
+			if !onPath(binDir) {
+				fmt.Printf("\nThat directory isn't on your PATH yet. Add it with:\n  export PATH=\"%s:$PATH\"\n", binDir)
 			}
 		}
+		return nil
+	},
+}
 
-		// Create template config based on repository type
-		var templateConfig *config.Config
+// buildApp turns the add flags into an app config.
+func buildApp(args []string) (*config.App, string, error) {
+	var (
+		name string
+		repo config.RepositoryConfig
+	)
 
-		if repoType == "github" {
-			templateConfig = &config.Config{
-				Repository: config.RepositoryConfig{
-					Type:      "github",
-					Owner:     "owner",
-					Repo:      "repo",
-					Token:     "",
-					AssetName: "",
-				},
-				CurrentVersion: "",
-				TargetPath:     "/path/to/target/binary",
-				Applier:        "binary",
-				DownloadDir:    filepath.Join(os.TempDir(), "guppy"),
+	switch {
+	case addURL != "":
+		if len(args) > 0 {
+			return nil, "", fmt.Errorf("give either owner/repo or --url, not both")
+		}
+		if addName == "" {
+			return nil, "", fmt.Errorf("--name is required with --url")
+		}
+		name = addName
+		repo = config.RepositoryConfig{Type: "http", URL: addURL}
+
+	case len(args) == 1:
+		owner, repoName, found := strings.Cut(args[0], "/")
+		if !found || owner == "" || repoName == "" {
+			return nil, "", fmt.Errorf("expected owner/repo, got %q", args[0])
+		}
+		name = addName
+		if name == "" {
+			name = repoName
+		}
+		repo = config.RepositoryConfig{
+			Type:      "github",
+			Owner:     owner,
+			Repo:      repoName,
+			Token:     addToken,
+			AssetName: addAsset,
+		}
+
+	default:
+		return nil, "", fmt.Errorf("expected owner/repo or --url\n\nUsage: guppy add <owner>/<repo>")
+	}
+
+	if err := config.ValidateName(name); err != nil {
+		return nil, "", err
+	}
+	if reserved(name) {
+		return nil, "", fmt.Errorf("%q is a guppy command; use --name to pick a different app name", name)
+	}
+
+	a := config.New(name)
+	a.Repository = repo
+	a.Applier = addApplier
+	a.Bin = addBin
+	a.PreInstall = addPreInstall
+	a.PostInstall = addPostInstall
+
+	return a, name, nil
+}
+
+var removeYes bool
+
+var removeCmd = &cobra.Command{
+	Use:     "remove <app>",
+	Aliases: []string{"rm"},
+	Short:   "Remove an application and everything guppy installed for it",
+	Args:    cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		a, err := config.LoadApp(args[0])
+		if err != nil {
+			return err
+		}
+
+		installDir, err := config.InstallDir(a.Name())
+		if err != nil {
+			return err
+		}
+
+		if !removeYes {
+			fmt.Printf("This will delete:\n  %s\n  %s\nand unlink %s from the bin directory.\n",
+				a.Path(), installDir, strings.Join(a.Binaries(), ", "))
+			fmt.Print("Continue? [y/N]: ")
+
+			var answer string
+			_, _ = fmt.Scanln(&answer)
+			if !strings.EqualFold(strings.TrimSpace(answer), "y") {
+				fmt.Println("Cancelled.")
+				return nil
 			}
-		} else { // http
-			templateConfig = &config.Config{
-				Repository: config.RepositoryConfig{
-					Type: "http",
-					URL:  "https://example.com/releases.json",
-				},
-				CurrentVersion: "",
-				TargetPath:     "/path/to/target/binary",
-				Applier:        "binary",
-				DownloadDir:    filepath.Join(os.TempDir(), "guppy"),
-			}
 		}
 
-		// Save the template config
-		if err := templateConfig.Save(configPath); err != nil {
-			return fmt.Errorf("error creating config file: %w", err)
+		if err := app.Remove(a); err != nil {
+			return err
 		}
 
-		fmt.Printf("✓ Created %s template config file at: %s\n", repoType, configPath)
-
-		// Print help text based on repository type
-		if repoType == "github" {
-			fmt.Println("\nPlease edit the config file and update the following fields:")
-			fmt.Println("  - repository.owner: GitHub repository owner")
-			fmt.Println("  - repository.repo: GitHub repository name")
-			fmt.Println("  - target_path: Path where the binary should be installed")
-			fmt.Println("\nOptional fields:")
-			fmt.Println("  - repository.token: GitHub personal access token (for private repos or higher rate limits)")
-			fmt.Println("  - repository.asset_name: Specific asset name to download")
-			fmt.Println("  - current_version: Current version (will be auto-updated after first update)")
-			fmt.Println("  - applier: Type of applier (binary or archive)")
-			fmt.Println("  - download_dir: Directory for temporary downloads")
-		} else { // http
-			fmt.Println("\nPlease edit the config file and update the following fields:")
-			fmt.Println("  - repository.url: URL to your releases.json file")
-			fmt.Println("  - target_path: Path where the binary should be installed")
-			fmt.Println("\nOptional fields:")
-			fmt.Println("  - current_version: Current version (will be auto-updated after first update)")
-			fmt.Println("  - applier: Type of applier (binary or archive)")
-			fmt.Println("  - download_dir: Directory for temporary downloads")
-			fmt.Println("\nYour releases.json file should be a JSON array with this format:")
-			fmt.Println(`  [
-    {
-      "version": "1.0.0",
-      "url": "https://example.com/download.zip",
-      "sha256": "abc123..." (optional but recommended)
-    }
-  ]`)
-			fmt.Println("\nSee USAGE.md for complete releases.json format documentation.")
-		}
-
+		fmt.Printf("✓ Removed %s\n", a.Name())
 		return nil
 	},
 }
 
 func init() {
-	rootCmd.PersistentFlags().StringVarP(&cfgFile, "config", "c", "", "config file (default is guppy.json in executable directory)")
+	rootCmd.PersistentFlags().StringVar(&configDir, "config-dir", "", "directory holding guppy's app configs")
 	rootCmd.PersistentFlags().BoolVarP(&debug, "debug", "d", false, "enable debug logging")
 	rootCmd.Flags().StringVarP(&intervalFlag, "interval", "i", "", "check for updates at regular intervals (e.g., 15m, 1h, 1d, or HH:MM:SS)")
 
-	rootCmd.AddCommand(checkCmd)
-	rootCmd.AddCommand(versionCmd)
-	rootCmd.AddCommand(initCmd)
-}
-
-func loadConfig() error {
-	var err error
-	if cfgFile == "" {
-		cfgFile = config.GetDefaultConfigPath()
-	}
-	debugLog("Loading config from: %s", cfgFile)
-	cfg, err = config.Load(cfgFile)
-	if err != nil {
-		return fmt.Errorf("%w\n\nYou can specify a config file location using the --config flag.\nTo create a template config file, run: guppy init --config <path>", err)
-	}
-	return nil
-}
-
-func createRepository() (repository.Repository, error) {
-	switch cfg.Repository.Type {
-	case "github":
-		repo := repository.NewGitHubRepository(
-			cfg.Repository.Owner,
-			cfg.Repository.Repo,
-			cfg.Repository.Token,
-		)
-		if cfg.Repository.AssetName != "" {
-			repo.SetAssetName(cfg.Repository.AssetName)
+	rootCmd.PersistentPreRunE = func(cmd *cobra.Command, args []string) error {
+		if configDir != "" {
+			return os.Setenv(config.EnvConfigDir, configDir)
 		}
-		repo.SetDebug(debug)
-		return repo, nil
-	case "http":
-		repo := repository.NewHTTPRepository(cfg.Repository.URL)
-		repo.SetDebug(debug)
-		return repo, nil
-	default:
-		return nil, fmt.Errorf("unsupported repository type: %s", cfg.Repository.Type)
-	}
-}
-
-// checkForUpdates checks if a new version is available and prints the result
-func checkForUpdates(repo repository.Repository) error {
-	fmt.Println("Checking for updates...")
-	latest, err := repo.GetLatestRelease()
-	if err != nil {
-		return fmt.Errorf("error getting latest release: %w", err)
-	}
-
-	fmt.Printf("Latest version: %s\n", latest.Version)
-
-	if cfg.CurrentVersion == "" {
-		fmt.Println("No current version set in config")
 		return nil
 	}
 
-	fmt.Printf("Current version: %s\n", cfg.CurrentVersion)
+	addCmd.Flags().StringVar(&addName, "name", "", "name for the app (defaults to the repo name)")
+	addCmd.Flags().StringVar(&addApplier, "applier", "binary", "how to install the download (binary or archive)")
+	addCmd.Flags().StringArrayVar(&addBin, "bin", nil, "binary to link into the bin directory (repeatable)")
+	addCmd.Flags().StringVar(&addAsset, "asset", "", "release asset name to download")
+	addCmd.Flags().StringVar(&addToken, "token", "", "GitHub token for private repos or higher rate limits")
+	addCmd.Flags().StringVar(&addURL, "url", "", "releases.json URL, for the http provider")
+	addCmd.Flags().StringArrayVar(&addPreInstall, "pre-install", nil, "shell command to run before installing (repeatable)")
+	addCmd.Flags().StringArrayVar(&addPostInstall, "post-install", nil, "shell command to run after installing (repeatable)")
 
-	isNewer, err := repo.CompareVersions(cfg.CurrentVersion, latest.Version)
+	removeCmd.Flags().BoolVarP(&removeYes, "yes", "y", false, "don't ask for confirmation")
+
+	rootCmd.AddCommand(checkCmd)
+	rootCmd.AddCommand(versionCmd)
+	rootCmd.AddCommand(addCmd)
+	rootCmd.AddCommand(listCmd)
+	rootCmd.AddCommand(removeCmd)
+	rootCmd.AddCommand(binCmd)
+}
+
+// reserved reports whether a name would be shadowed by a guppy subcommand.
+func reserved(name string) bool {
+	for _, cmd := range rootCmd.Commands() {
+		if cmd.Name() == name || slices.Contains(cmd.Aliases, name) {
+			return true
+		}
+	}
+	return false
+}
+
+// resolveApps returns the named apps, or every configured app when no names
+// are given.
+func resolveApps(names []string) ([]string, error) {
+	if len(names) > 0 {
+		return names, nil
+	}
+
+	all, err := config.ListApps()
 	if err != nil {
-		return fmt.Errorf("error comparing versions: %w", err)
+		return nil, err
+	}
+	if len(all) == 0 {
+		return nil, fmt.Errorf("no apps configured\n\nAdd one with: guppy add <owner>/<repo>")
+	}
+	return all, nil
+}
+
+// forEachApp runs fn against each named app, continuing past failures so one
+// broken app doesn't stop the rest, and reporting how many failed.
+func forEachApp(names []string, fn func(*config.App) error) error {
+	var failed int
+	for _, name := range names {
+		a, err := config.LoadApp(name)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%s: %v\n", name, err)
+			failed++
+			continue
+		}
+
+		debugLog("Loaded app %s from %s", a.Name(), a.Path())
+		if err := fn(a); err != nil {
+			fmt.Fprintf(os.Stderr, "%s: %v\n", name, err)
+			failed++
+		}
 	}
 
-	if isNewer {
-		fmt.Printf("🎉 New version available: %s\n", latest.Version)
-		fmt.Printf("Download URL: %s\n", latest.DownloadURL)
-	} else {
-		fmt.Println("✓ You are up to date!")
+	if failed > 0 {
+		return fmt.Errorf("%d of %d app(s) failed", failed, len(names))
 	}
-
 	return nil
 }
 
-// performUpdate checks for and applies updates. Returns true if an update was applied, false otherwise.
-func performUpdate(repo repository.Repository) error {
-	fmt.Println("Checking for updates...")
-	latest, err := repo.GetLatestRelease()
+func newInstaller(a *config.App) (*app.Installer, error) {
+	repo, err := app.NewRepository(a, debug)
 	if err != nil {
-		return fmt.Errorf("error getting latest release: %w", err)
+		return nil, err
+	}
+	return &app.Installer{Repo: repo, Debug: debug}, nil
+}
+
+func updateApps(args []string) error {
+	apps, err := resolveApps(args)
+	if err != nil {
+		return err
 	}
 
-	if cfg.CurrentVersion != "" {
-		isNewer, err := repo.CompareVersions(cfg.CurrentVersion, latest.Version)
+	return forEachApp(apps, func(a *config.App) error {
+		installer, err := newInstaller(a)
 		if err != nil {
-			return fmt.Errorf("error comparing versions: %w", err)
+			return err
 		}
+		return installer.Install(a)
+	})
+}
 
-		if !isNewer {
-			fmt.Println("✓ Already up to date!")
-			return nil
-		}
-	}
-
-	fmt.Printf("Downloading version %s...\n", latest.Version)
-
-	// Create download directory
-	if err := os.MkdirAll(cfg.DownloadDir, 0755); err != nil {
-		return fmt.Errorf("error creating download directory: %w", err)
-	}
-
-	downloadPath := filepath.Join(cfg.DownloadDir, latest.FileName)
-	debugLog("Computed download path: %s", downloadPath)
-	if err := repo.Download(latest, downloadPath); err != nil {
-		return fmt.Errorf("error downloading release: %w", err)
-	}
-
-	fmt.Printf("Downloaded to: %s\n", downloadPath)
-
-	// Verify checksum if provided
-	if latest.Checksum != "" {
-		fmt.Println("Verifying checksum...")
-		valid, err := checksum.VerifySHA256(downloadPath, latest.Checksum)
-		if err != nil {
-			return fmt.Errorf("error verifying checksum: %w", err)
-		}
-		if !valid {
-			return fmt.Errorf("checksum verification failed - file may be corrupted")
-		}
-		fmt.Println("✓ Checksum verified")
-	}
-
-	// Apply the update
-	fmt.Printf("Applying update to %s...\n", cfg.TargetPath)
-
-	var app applier.Applier
-	switch cfg.Applier {
-	case "binary":
-		app = applier.NewBinaryApplier()
-	case "archive":
-		app = applier.NewArchiveApplier()
-	default:
-		return fmt.Errorf("unknown applier type: %s", cfg.Applier)
-	}
-
-	if err := app.Apply(downloadPath, cfg.TargetPath); err != nil {
-		return fmt.Errorf("error applying update: %w", err)
-	}
-
-	fmt.Println("✓ Update applied successfully!")
-
-	// Update current version in config
-	cfg.CurrentVersion = latest.Version
-	if err := cfg.Save(cfgFile); err != nil {
-		fmt.Printf("Warning: Could not save updated version to config: %v\n", err)
-	}
-
-	return nil
+// onPath reports whether dir is already in PATH.
+func onPath(dir string) bool {
+	return slices.Contains(filepath.SplitList(os.Getenv("PATH")), dir)
 }

@@ -1,31 +1,38 @@
 # Guppy Examples
 
-This directory contains example configuration files for Guppy.
+Example app configurations. Each file defines one app; the filename is the app's name.
 
-## Basic GitHub Binary Update
+| File | Shows |
+|---|---|
+| `ripgrep.yaml` | An archive release whose binary sits inside a versioned directory |
+| `myservice.yaml` | `pre_install` / `post_install` hooks around a service restart |
 
-The `guppy.json` file shows a basic configuration for updating a binary from GitHub releases.
+## Using them
 
-To use this example:
+Most of the time you don't need to copy anything — `guppy add` writes the config for you:
 
-1. Copy `guppy.json` to your home directory:
-   ```bash
-   mkdir -p ~/.config/guppy
-   cp guppy.json ~/.config/guppy/
-   ```
+```bash
+guppy add BurntSushi/ripgrep --applier archive --bin rg
+```
 
-2. Edit the configuration to match your project:
-   - Change `owner` and `repo` to your GitHub repository
-   - Set `asset_name` to the specific asset you want to download
-   - Set `target_path` to where the binary should be installed
-   - Optionally add a GitHub token if accessing private repos
+To use a file directly, drop it in guppy's apps folder. That's `~/.config/guppy/apps` on Linux, `~/Library/Application Support/guppy/apps` on macOS, and `%AppData%\guppy\apps` on Windows:
 
-3. Run guppy:
-   ```bash
-   guppy check   # Check for updates
-   guppy update  # Download and apply updates
-   ```
+```bash
+cp ripgrep.yaml ~/.config/guppy/apps/
+```
 
-## Configuration Options
+Then install it:
 
-See the [USAGE.md](../USAGE.md) file for complete documentation on all configuration options and examples.
+```bash
+guppy ripgrep
+```
+
+Binaries land in the folder `guppy bin` prints. Add it to your PATH:
+
+```bash
+export PATH="$(guppy bin):$PATH"
+```
+
+JSON works too, if you prefer it — name the file `ripgrep.json` and use the same keys.
+
+See [USAGE.md](../USAGE.md) for the full set of configuration options.

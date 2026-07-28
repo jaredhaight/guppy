@@ -256,76 +256,6 @@ func TestGetRelease(t *testing.T) {
 	}
 }
 
-func TestVerifyChecksum(t *testing.T) {
-	// Create a temporary file with known content
-	content := []byte("test content for checksum verification")
-	tmpDir := t.TempDir()
-	tmpFile := filepath.Join(tmpDir, "test.txt")
-
-	if err := os.WriteFile(tmpFile, content, 0644); err != nil {
-		t.Fatalf("Failed to create test file: %v", err)
-	}
-
-	tests := []struct {
-		name     string
-		checksum string
-		wantErr  bool
-	}{
-		{
-			name:     "valid sha256",
-			checksum: "sha256:0bb4f3131cf52feab05638958f23f10539388ba67cd7977f5ffc46add6a3fff5",
-			wantErr:  false,
-		},
-		{
-			name:     "valid sha1",
-			checksum: "sha1:9972a14ef931c289b5122e6e1b7005e7891f28ff",
-			wantErr:  false,
-		},
-		{
-			name:     "valid md5",
-			checksum: "md5:d28cd39b02ce37082426395b9385f56e",
-			wantErr:  false,
-		},
-		{
-			name:     "invalid sha256",
-			checksum: "sha256:wronghash",
-			wantErr:  true,
-		},
-		{
-			name:     "invalid algorithm",
-			checksum: "sha512:abc123",
-			wantErr:  true,
-		},
-		{
-			name:     "invalid format - no colon",
-			checksum: "sha256abc123",
-			wantErr:  true,
-		},
-		{
-			name:     "empty checksum",
-			checksum: "",
-			wantErr:  true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			h := NewHTTPRepository("http://example.com/releases.json")
-			err := h.verifyChecksum(tmpFile, tt.checksum)
-
-			if tt.wantErr {
-				if err == nil {
-					t.Errorf("verifyChecksum() expected error, got nil")
-				}
-			} else {
-				if err != nil {
-					t.Errorf("verifyChecksum() unexpected error: %v", err)
-				}
-			}
-		})
-	}
-}
-
 func TestConvertHTTPRelease(t *testing.T) {
 	tests := []struct {
 		name             string
@@ -408,10 +338,12 @@ func TestDownload(t *testing.T) {
 			wantErr:     false,
 		},
 		{
-			name:        "download with invalid checksum",
+			// Download no longer verifies; checksum.Verify does, once, in the
+			// install pipeline. A bad checksum here is simply carried through.
+			name:        "download does not verify the checksum itself",
 			fileContent: []byte("test content"),
 			checksum:    "sha256:wronghash",
-			wantErr:     true,
+			wantErr:     false,
 		},
 	}
 

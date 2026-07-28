@@ -1,8 +1,9 @@
 # Guppy Usage Guide
 
-Guppy is a software update helper that checks for new releases, downloads them, and applies the new version.
+Guppy manages applications published as GitHub releases or served from your own web server. It checks for new versions, downloads and verifies them, installs them, and links their binaries into a folder on your PATH.
 
 ## Installation
+
 You can download the latest version of guppy from the [release page](https://github.com/jaredhaight/guppy/releases) or you can build from source:
 
 ```bash
@@ -11,373 +12,377 @@ cd guppy
 go build -o guppy ./cmd/guppy
 ```
 
-## Configuration
-
-Guppy uses a JSON configuration file. By default, it looks for `guppy.json` in the same directory as the guppy executable. You can specify a custom config file location using the `--config` flag (see Command-Line Flags below).
-
-### Configuration File Format
-
-```json
-{
-  "repository": {
-    "type": "github",
-    "owner": "username",
-    "repo": "project",
-    "token": "",
-    "asset_name": "project-linux-amd64"
-  },
-  "current_version": "1.0.0",
-  "target_path": "/usr/local/bin/myapp",
-  "applier": "binary"
-}
-```
-
-### Configuration Fields
-
-#### repository
-- `type` (required): Repository type. Supports `github` and `http`
-
-**For GitHub repositories:**
-- `owner` (required): Repository owner/organization name
-- `repo` (required): Repository name
-- `token` (optional): GitHub personal access token for private repos or higher rate limits
-- `asset_name` (optional): Specific asset name to download. If not specified, uses the first asset
-
-**For HTTP repositories:**
-- `url` (required): URL to the releases.json file containing release information
-
-#### current_version
-- Current version of the software using Sematic versioning (e.g., "v1.0.0" or "2025.1107.01", etc). 
-  - This value is updated (or set) once a new version has been downloaded. 
-
-#### target_path
-- Path where the update should be applied
-  - For binary applier: path to the binary file
-  - For archive applier: directory where archive will be extracted
-
-#### applier
-- Type of applier to use. Options:
-  - `binary`: Replace a single binary file
-  - `archive`: Extract a zip or tar.gz archive
-
-#### download_dir (optional)
-- Directory where releases are downloaded
-- Default: `{OS_TEMP_DIR}/guppy` (e.g., `/tmp/guppy` on Linux/macOS, `C:\Users\{USERNAME}\AppData\Local\Temp\guppy` on Windows)
-
-## Command-Line Flags
-
-Guppy supports the following command-line flags:
-
-### --config, -c
-Specify a custom configuration file path.
+Then add guppy's bin folder to your PATH:
 
 ```bash
-guppy check --config /path/to/config.json
-guppy update -c /path/to/config.json
+export PATH="$(guppy bin):$PATH"
 ```
 
-### --debug, -d
-Enable debug logging for troubleshooting.
+Put that line in your shell profile (`~/.zshrc`, `~/.bashrc`) to make it permanent.
 
-```bash
-guppy check --debug
-guppy update -d
+## Where guppy keeps things
+
+Guppy uses the standard configuration and data locations for your operating system.
+
+| | Config | Data |
+|---|---|---|
+| Linux | `~/.config/guppy` | `~/.local/share/guppy` |
+| macOS | `~/Library/Application Support/guppy` | `~/Library/Application Support/guppy` |
+| Windows | `%AppData%\guppy` | `%LocalAppData%\guppy` |
+
+Within those:
+
+```
+<config>/apps/<name>.yaml     one file per managed app
+<data>/bin/                   the binaries guppy installs  ← put this on your PATH
+<data>/apps/<name>/           where each app's files are installed
+<data>/downloads/             transient, cleaned up after each install
 ```
 
-### --interval, -i
-Run the update command continuously at the specified interval. Only available for the `update` command.
-
-Supported interval formats:
-- Duration format: `15m`, `1h`, `30s`, `1d` (can be combined like `1h30m`)
-- HH:MM:SS format: `01:30:00`, `00:15:00`
-
-```bash
-# Check for updates every 15 minutes
-guppy update --interval 15m
-
-# Check for updates every hour
-guppy update --interval 1h
-
-# Check for updates once per day
-guppy update --interval 1d
-
-# Check for updates every 1 hour 30 minutes using HH:MM:SS format
-guppy update --interval 01:30:00
-```
-
-When running with `--interval`, guppy will:
-- Run an initial update check immediately
-- Continue checking at the specified interval indefinitely
-- Log errors but continue running on failures
-- Apply updates automatically when found and continue monitoring
-- Gracefully shutdown when receiving SIGINT (Ctrl+C) or SIGTERM
-
-This is useful for long-running applications that need automatic updates, or for running guppy as a background service.
+Both locations can be overridden with the `GUPPY_CONFIG_DIR` and `GUPPY_DATA_DIR` environment variables, or the config location with `--config-dir`. This is useful for keeping a separate set of apps, or for testing.
 
 ## Commands
 
-### guppy check
+### guppy [app...]
 
-Check for available updates without downloading or applying them.
+Updates apps. With no arguments it updates every app you've added.
+
+```bash
+guppy
+```
+
+```bash
+guppy ripgrep fd
+```
+
+If one app fails, the rest still run, and guppy reports how many failed at the end.
+
+### guppy check [app...]
+
+Reports what's available without downloading or installing anything.
 
 ```bash
 guppy check
 ```
 
-Example output:
 ```
-Checking for updates...
-Latest version: v2.0.0
-Current version: v1.0.0
-🎉 New version available: v2.0.0
-Download URL: https://github.com/user/project/releases/download/v2.0.0/project-linux-amd64
+fd: ✓ up to date (10.2.0)
+ripgrep: 🎉 14.1.1 available (current 14.0.3)
 ```
 
-### guppy update
+### guppy add
 
-Download and apply available updates.
+Starts managing an app. For a GitHub repository:
 
 ```bash
-guppy update
+guppy add BurntSushi/ripgrep --applier archive --bin rg
 ```
 
-Example output:
+For an HTTP release feed:
+
+```bash
+guppy add --url https://example.com/releases.json --name myapp
 ```
-Checking for updates...
-Downloading version v2.0.0...
-Downloaded to: /tmp/guppy/project-linux-amd64
-Verifying checksum...
-✓ Checksum verified
-Applying update to /usr/local/bin/myapp...
-✓ Update applied successfully!
+
+| Flag | Purpose |
+|---|---|
+| `--name` | App name. Defaults to the repo name |
+| `--applier` | `binary` (default) or `archive` |
+| `--bin` | A binary to link into the bin folder. Repeatable |
+| `--asset` | Which release asset to download, by name or pattern |
+| `--token` | GitHub token, for private repos or higher rate limits |
+| `--url` | Release feed URL, for the http provider |
+| `--pre-install` | Shell command to run before installing. Repeatable |
+| `--post-install` | Shell command to run after installing. Repeatable |
+
+The app name can't collide with a guppy subcommand — use `--name` if the repo is called something like `list`.
+
+### guppy list
+
+```bash
+guppy list
+```
+
+```
+APP                      VERSION        SOURCE
+fd                       10.2.0         sharkdp/fd
+ripgrep                  14.1.1         BurntSushi/ripgrep
+```
+
+### guppy remove
+
+Deletes the app's config, its install directory, and its bin links. Asks for confirmation unless you pass `--yes`.
+
+```bash
+guppy remove ripgrep
+```
+
+### guppy bin
+
+Prints the folder guppy links binaries into, so you can add it to your PATH.
+
+```bash
+export PATH="$(guppy bin):$PATH"
 ```
 
 ### guppy version
 
-Show the version of guppy itself.
+Prints guppy's own version.
+
+## Command-Line Flags
+
+### --config-dir
+
+Use a different config folder. Handy for keeping separate sets of apps.
 
 ```bash
-guppy version
+guppy --config-dir ~/work-tools list
 ```
 
-### guppy init
+### --debug, -d
 
-Create a template configuration file for a specific repository type.
+Enable debug logging, written to stderr.
 
-**Usage:**
 ```bash
-guppy init [type]
+guppy --debug ripgrep
 ```
 
-**Arguments:**
-- `type` (optional): Repository type - either `github` or `http`
-  - If not specified, guppy will prompt you to select a type interactively
+### --interval, -i
 
-**Examples:**
+Keep running, checking at a fixed interval instead of exiting after one pass. Accepts `15m`, `1h`, `1d`, or `HH:MM:SS`.
 
-Create a GitHub repository template:
 ```bash
-guppy init github
+guppy --interval 6h
 ```
 
-Create an HTTP repository template:
 ```bash
-guppy init http
+guppy --interval 01:30:00
 ```
 
-Interactive mode (prompts for repository type):
-```bash
-guppy init
+Press Ctrl+C to stop. Guppy also stops cleanly on SIGTERM, so it works under systemd.
+
+## Configuration
+
+Each app has its own file in `<config>/apps/`. Guppy reads YAML (`.yaml`, `.yml`) and JSON (`.json`); `guppy add` writes YAML. The app's name comes from the filename, so `ripgrep.yaml` defines an app called `ripgrep`.
+
+```yaml
+repository:
+  type: github
+  owner: BurntSushi
+  repo: ripgrep
+  asset_name: aarch64-apple-darwin\.tar\.gz$
+current_version: 14.1.1
+applier: archive
+bin:
+  - rg
+pre_install:
+  - systemctl --user stop myservice
+post_install:
+  - rg --version
 ```
 
-This creates a `guppy.json` file with default values that you can customize for your application. The template will be tailored to the selected repository type:
+### repository
 
-- **GitHub template**: Includes fields for `owner`, `repo`, `token`, and `asset_name`
-- **HTTP template**: Includes field for `url` pointing to your releases.json file
+Where releases come from.
+
+For `type: github`:
+
+| Field | Required | Purpose |
+|---|---|---|
+| `owner` | yes | Repository owner |
+| `repo` | yes | Repository name |
+| `token` | no | Personal access token, for private repos or higher rate limits |
+| `asset_name` | no | Which asset to download. Defaults to the first one. See below |
+
+For `type: http`:
+
+| Field | Required | Purpose |
+|---|---|---|
+| `url` | yes | URL of the releases JSON feed |
+
+#### asset_name
+
+Most projects attach one asset per platform, so you need to say which one you want. `asset_name` is matched first as an exact filename, and failing that as a regular expression.
+
+The pattern form is usually what you want, because asset names embed the version:
+
+```
+ripgrep-15.2.0-aarch64-apple-darwin.tar.gz
+```
+
+Pinning that exact name means guppy stops finding an asset the day 15.3.0 ships. A pattern keeps working:
+
+```yaml
+asset_name: aarch64-apple-darwin\.tar\.gz$
+```
+
+Anchor the end with `$`. Many projects publish a `.sha256` file next to each asset, so an unanchored `aarch64-apple-darwin\.tar\.gz` matches both and guppy reports the ambiguity rather than guessing. When a pattern matches nothing, the error lists the assets that release actually has.
+
+### current_version
+
+The version currently installed. Guppy writes this itself after each successful install, so you normally leave it alone. When it's empty, guppy installs the latest release.
+
+### applier
+
+How the download is installed.
+
+- `binary` — the download is a single executable. It's installed into the app's directory and linked into the bin folder.
+- `archive` — the download is a `.zip`, `.tar.gz` or `.tgz`. It's extracted into the app's directory, then the binaries named in `bin` are linked.
+
+### bin
+
+Which binaries to link into the bin folder. Defaults to the app's own name.
+
+Each entry is looked up first as a path relative to the install directory, and failing that by searching the extracted files for that filename. This second form is what you usually want, because archives commonly unpack into a versioned directory:
+
+```
+ripgrep-14.1.1-x86_64-apple-darwin/rg
+```
+
+Writing `bin: [rg]` finds that no matter what the version directory is called. If a name turns out to be ambiguous, guppy tells you which files matched so you can give the relative path instead.
+
+Binaries are linked, not copied, and guppy makes them executable — archives don't always record the executable bit.
+
+### pre_install and post_install
+
+Shell commands to run around the install. Each is a list, run in order, stopping at the first failure.
+
+```yaml
+pre_install:
+  - systemctl --user stop myservice
+post_install:
+  - ./bin/migrate --up
+  - systemctl --user start myservice
+```
+
+These run through your system shell (`sh -c`, or `cmd /c` on Windows), so pipes, redirection and `&&` all work.
+
+They run with the app's install directory as the working directory, and with these variables in the environment:
+
+| Variable | Value |
+|---|---|
+| `GUPPY_APP` | The app's name |
+| `GUPPY_VERSION` | The version being installed |
+| `GUPPY_PREVIOUS_VERSION` | The version being replaced, empty on a first install |
+| `GUPPY_INSTALL_DIR` | Where the app's files are |
+| `GUPPY_BIN_DIR` | Where binaries are linked |
+| `GUPPY_DOWNLOAD` | The downloaded file |
+
+**Ordering.** `pre_install` runs *after* the download has been fetched and verified, not before. A failed download therefore never leaves a stopped service behind.
+
+If `pre_install` fails, nothing is installed and the recorded version is unchanged. If `post_install` fails, the install has already happened and is recorded — guppy reports the hook failure and says so.
+
+Because these are shell commands from your own config file, treat an app config the same way you'd treat a shell script: only use ones you trust.
 
 ## Examples
 
-### Example 1: Binary Update
+### Example 1: A binary release from GitHub
 
-Update a single binary application from GitHub releases.
-
-**Config file (guppy.json):**
-```json
-{
-  "repository": {
-    "type": "github",
-    "owner": "cli",
-    "repo": "cli",
-    "asset_name": "gh_linux_amd64.tar.gz"
-  },
-  "current_version": "2.0.0",
-  "target_path": "/usr/local/bin/gh",
-  "applier": "binary",
-  "download_dir": "/tmp/guppy"
-}
-```
-
-**Usage:**
 ```bash
-guppy check    # Check for updates
-guppy update   # Apply updates
+guppy add jaredhaight/guppy --asset guppy-linux-amd64
 ```
 
-### Example 2: Archive Extraction
-
-Extract an archive containing multiple files.
-
-**Config file:**
-```json
-{
-  "repository": {
-    "type": "github",
-    "owner": "user",
-    "repo": "app",
-    "asset_name": "app-linux.tar.gz"
-  },
-  "current_version": "1.0.0",
-  "target_path": "/opt/myapp",
-  "applier": "archive",
-  "download_dir": "/tmp/guppy"
-}
+```bash
+guppy guppy
 ```
 
-### Example 3: Private Repository
+### Example 2: An archive with a nested binary
 
-Use a GitHub token for private repositories.
-
-**Config file:**
-```json
-{
-  "repository": {
-    "type": "github",
-    "owner": "myorg",
-    "repo": "private-app",
-    "token": "ghp_xxxxxxxxxxxxxxxxxxxx",
-    "asset_name": "app-linux-amd64"
-  },
-  "current_version": "1.0.0",
-  "target_path": "/usr/local/bin/private-app",
-  "applier": "binary"
-}
+```bash
+guppy add BurntSushi/ripgrep --applier archive --bin rg --asset 'x86_64-unknown-linux-musl\.tar\.gz$'
 ```
 
-### Example 4: HTTP Repository
+### Example 3: A private repository
 
-Update from a custom web server using the HTTP repository type.
-
-**Config file:**
-```json
-{
-  "repository": {
-    "type": "http",
-    "url": "https://updates.example.com/myapp/releases.json"
-  },
-  "current_version": "1.0.0",
-  "target_path": "/usr/local/bin/myapp",
-  "applier": "binary"
-}
+```bash
+guppy add myorg/internal-tool --token github_pat_xxxxxxxxxxxx
 ```
 
-**releases.json format:**
+Prefer editing `token` into the config file over passing it on the command line, so it doesn't land in your shell history.
+
+### Example 4: A service that needs restarting
+
+`~/.config/guppy/apps/myservice.yaml`
+
+```yaml
+repository:
+  type: github
+  owner: myorg
+  repo: myservice
+applier: archive
+bin:
+  - myservice
+pre_install:
+  - systemctl --user stop myservice
+post_install:
+  - ./bin/migrate --up
+  - systemctl --user start myservice
+```
+
+### Example 5: An HTTP release feed
+
+```bash
+guppy add --url https://example.com/releases.json --name myapp --applier archive --bin myapp
+```
+
+The feed is a JSON array:
+
 ```json
 [
   {
-    "version": "2025.281.3",
-    "url": "https://updates.example.com/myapp/download-v3.zip",
+    "version": "1.0.0",
+    "url": "https://example.com/myapp-1.0.0.tar.gz",
     "sha256": "997c3ad2cd376d4cc609c3879b831fcfcf785cea14b427c8d7bfc40f77e0c3eb"
   },
   {
-    "version": "2025.281.2",
-    "url": "https://updates.example.com/myapp/download-v2.zip",
-    "sha1": "367c432837f71657db863dae11a71202414f36d8"
-  },
-  {
-    "version": "2025.281.1",
-    "url": "https://updates.example.com/myapp/download-v1.zip",
-    "md5": "d1c47df9c7d692538e6744fea9d826b1"
+    "version": "1.1.0",
+    "url": "https://example.com/myapp-1.1.0.tar.gz",
+    "sha256": "a1b2c3d4e5f6789012345678901234567890123456789012345678901234567a"
   }
 ]
 ```
 
-**Notes:**
-- The `releases.json` file must be a JSON array of release objects
-- Each release must have a `version` and `url` field
-- Checksums are optional but recommended. Supported algorithms: `sha256`, `sha1`, `md5`
-- If multiple checksums are provided, guppy uses the highest security algorithm (SHA256 > SHA1 > MD5)
+Guppy picks the highest version, so order doesn't matter.
 
-### Example 5: Continuous Monitoring with Intervals
+### Example 6: Continuous monitoring
 
-Keep an application automatically updated by checking for new releases at regular intervals.
-
-**Config file:**
-```json
-{
-  "repository": {
-    "type": "github",
-    "owner": "user",
-    "repo": "myapp",
-    "asset_name": "myapp-linux-amd64"
-  },
-  "current_version": "1.0.0",
-  "target_path": "/usr/local/bin/myapp",
-  "applier": "binary"
-}
-```
-
-**Usage:**
 ```bash
-# Check for updates every 6 hours
-guppy update --interval 6h
-
-# Check for updates every day at the interval
-guppy update --interval 1d
-
-# Check for updates every 30 minutes
-guppy update --interval 30m
+guppy --interval 6h
 ```
 
-**Example output:**
+As a systemd user service:
+
+```ini
+[Unit]
+Description=Guppy update monitor
+
+[Service]
+ExecStart=/usr/local/bin/guppy --interval 6h
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
 ```
-Starting update monitoring (checking every 6h0m0s). Press Ctrl+C to stop.
-Checking for updates...
-✓ Already up to date!
-
-[2025-11-10 18:00:00] Running scheduled update check...
-Checking for updates...
-Downloading version v2.0.0...
-Downloaded to: /tmp/guppy/myapp-linux-amd64
-Verifying checksum...
-✓ Checksum verified
-Applying update to /usr/local/bin/myapp...
-✓ Update applied successfully!
-
-[2025-11-11 00:00:00] Running scheduled update check...
-Checking for updates...
-✓ Already up to date!
-```
-
-This is particularly useful for:
-- Running guppy as a systemd service or daemon
-- Keeping deployed applications automatically updated
-- Development/staging environments that should always run the latest version
 
 ## Checksum Verification
 
-Guppy automatically verifies checksums to ensure the downloaded file hasn't been corrupted or tampered with.
+Guppy verifies downloads whenever the release provides a checksum.
 
-**For GitHub repositories:**
-- Guppy uses SHA256 checksums if provided in the GitHub release asset digest
+- **GitHub** supplies a SHA256 digest for release assets automatically.
+- **HTTP** feeds may include `md5`, `sha1` and/or `sha256`. Guppy uses the strongest one available (sha256 > sha1 > md5).
 
-**For HTTP repositories:**
-- You can specify `sha256`, `sha1`, or `md5` checksums in the releases.json file
-- If multiple checksums are provided, guppy uses the most secure algorithm available (SHA256 > SHA1 > MD5)
-
-If checksum verification fails, the downloaded file will be deleted and the update will not be applied.
+A download that fails verification is deleted and the install stops. If a release carries no checksum at all, guppy installs it and notes this under `--debug`.
 
 ## Supported Archive Formats
 
-The archive applier supports:
-- `.zip` files
-- `.tar.gz` and `.tgz` files
+- `.zip`
+- `.tar.gz`
+- `.tgz`
+
+The format is chosen by the filename. Symlinks and device entries inside archives are skipped, and entries that would write outside the install directory are rejected.
+
+Extraction is staged: files are unpacked alongside the current install and only swapped in once extraction succeeds, so a truncated or corrupt archive leaves your working install intact.
+
+## Exit Status
+
+Guppy exits non-zero if any app fails. When updating several apps, a failure in one doesn't stop the others — guppy reports each failure and finishes with a count.
