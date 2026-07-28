@@ -92,7 +92,14 @@ jobs:
         with:
           # Pinned, not "latest": a linter that changes under you turns an
           # unrelated PR red and teaches people to ignore the lint job.
-          version: v2.6.1
+          #
+          # This pin is coupled to the Go version above and the two must be
+          # bumped together. golangci-lint type-checks with the toolchain it
+          # was *built* with, so a release older than the Go running here
+          # panics with "file requires newer Go version". v2.12.2 is built
+          # with go1.26.2; check a candidate with:
+          #   go version -m $(which golangci-lint)
+          version: v2.12.2
           args: --timeout=5m
 
   vulncheck:

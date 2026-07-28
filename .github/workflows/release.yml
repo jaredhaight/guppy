@@ -66,11 +66,18 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: 0
+          # Passed through the environment rather than interpolated into the
+          # script. VERSION is a git tag name, so expanding ${{ }} directly
+          # inside run: would let a crafted tag close the quote and append
+          # commands. OUTPUT comes from the matrix and is safe either way,
+          # but the two travel together.
+          VERSION: ${{ steps.get_version.outputs.VERSION }}
+          OUTPUT: ${{ matrix.output }}
         run: |
           go build \
             -trimpath \
-            -ldflags "-s -w -X main.Version=${{ steps.get_version.outputs.VERSION }}" \
-            -o ${{ matrix.output }} \
+            -ldflags "-s -w -X main.Version=${VERSION}" \
+            -o "${OUTPUT}" \
             ./cmd/guppy
 
       - name: Upload artifact
