@@ -222,6 +222,60 @@ func TestSaveNewAppWritesYAML(t *testing.T) {
 	}
 }
 
+// Config files hold repository.token, a GitHub PAT, so they must not be
+// readable by other users on the machine.
+func TestSaveWritesOwnerOnlyPermissions(t *testing.T) {
+	testRoot(t)
+
+	a := New("secretapp")
+	a.Repository = RepositoryConfig{Type: "github", Owner: "o", Repo: "r", Token: "github_pat_secret"}
+	if err := a.Save(); err != nil {
+		t.Fatalf("Save() error: %v", err)
+	}
+
+	info, err := os.Stat(a.Path())
+	if err != nil {
+		t.Fatalf("Stat() error: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0600 {
+		t.Errorf("Save() wrote mode %04o, want 0600 (the file holds a token)", perm)
+	}
+}
+
+// A config written by an older guppy is already on disk at 0644. Re-saving it
+// has to tighten it, which os.WriteFile alone does not do.
+func TestSaveTightensPermissionsOnExistingFile(t *testing.T) {
+	testRoot(t)
+
+	dir, err := AppsDir()
+	if err != nil {
+		t.Fatalf("AppsDir() error: %v", err)
+	}
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatalf("MkdirAll() error: %v", err)
+	}
+	path := filepath.Join(dir, "legacy.yaml")
+	if err := os.WriteFile(path, []byte("repository:\n  type: github\n  owner: o\n  repo: r\n"), 0644); err != nil {
+		t.Fatalf("WriteFile() error: %v", err)
+	}
+
+	a, err := LoadApp("legacy")
+	if err != nil {
+		t.Fatalf("LoadApp() error: %v", err)
+	}
+	if err := a.Save(); err != nil {
+		t.Fatalf("Save() error: %v", err)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat() error: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0600 {
+		t.Errorf("Save() left mode %04o on a pre-existing file, want 0600", perm)
+	}
+}
+
 func TestListApps(t *testing.T) {
 	testRoot(t)
 
@@ -341,6 +395,25 @@ func TestValidate(t *testing.T) {
 		{
 			name:    "http without url",
 			app:     App{name: "a", Repository: RepositoryConfig{Type: "http"}, Applier: "binary"},
+			wantErr: true,
+		},
+		{
+			name:    "plain http url is rejected",
+			app:     App{name: "a", Repository: RepositoryConfig{Type: "http", URL: "http://example.com/r.json"}, Applier: "archive"},
+			wantErr: true,
+		},
+		{
+			name: "plain http url is allowed with allow_unverified",
+			app: App{name: "a", Repository: RepositoryConfig{Type: "http", URL: "http://example.com/r.json"},
+				Applier: "archive", AllowUnverified: true},
+		},
+		{
+			name: "loopback http url needs no override",
+			app:  App{name: "a", Repository: RepositoryConfig{Type: "http", URL: "http://127.0.0.1:8080/r.json"}, Applier: "archive"},
+		},
+		{
+			name:    "non-http scheme is rejected",
+			app:     App{name: "a", Repository: RepositoryConfig{Type: "http", URL: "file:///etc/passwd"}, Applier: "archive"},
 			wantErr: true,
 		},
 		{

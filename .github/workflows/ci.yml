@@ -8,18 +8,25 @@ on:
 permissions:
   contents: read
 
+# Actions are pinned to a commit SHA, not a tag. A tag is mutable: whoever
+# controls the action repo can repoint v4 at new code, and that code runs with
+# access to this workflow's token. The trailing comment is the readable
+# version — update both together.
 jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: 'go.mod'
+          # Latest patched toolchain rather than go.mod's minimum: stdlib CVEs
+          # (crypto/tls, crypto/x509, net/http) ship in the toolchain, and
+          # guppy's security rests on all three.
+          go-version: 'stable'
 
       - name: Download dependencies
         run: go mod download
@@ -58,12 +65,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: 'go.mod'
+          go-version: 'stable'
 
       - name: Build
         run: go build -v ./cmd/guppy
@@ -73,15 +80,41 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: 'go.mod'
+          go-version: 'stable'
 
       - name: Run golangci-lint
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
-          version: latest
+          # Pinned, not "latest": a linter that changes under you turns an
+          # unrelated PR red and teaches people to ignore the lint job.
+          #
+          # This pin is coupled to the Go version above and the two must be
+          # bumped together. golangci-lint type-checks with the toolchain it
+          # was *built* with, so a release older than the Go running here
+          # panics with "file requires newer Go version". v2.12.2 is built
+          # with go1.26.2; check a candidate with:
+          #   go version -m $(which golangci-lint)
+          version: v2.12.2
           args: --timeout=5m
+
+  vulncheck:
+    name: Vulnerability scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: 'stable'
+
+      # Reports only the vulnerabilities guppy actually reaches, in its
+      # dependencies and in the standard library it was built against.
+      - name: Run govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...

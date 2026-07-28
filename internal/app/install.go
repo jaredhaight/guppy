@@ -2,16 +2,17 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 
+	"github.com/jaredhaight/guppy/internal/applier"
+	"github.com/jaredhaight/guppy/internal/checksum"
 	"github.com/jaredhaight/guppy/internal/config"
 	"github.com/jaredhaight/guppy/internal/hook"
-	"github.com/jaredhaight/guppy/pkg/applier"
-	"github.com/jaredhaight/guppy/pkg/checksum"
-	"github.com/jaredhaight/guppy/pkg/repository"
+	"github.com/jaredhaight/guppy/internal/repository"
 )
 
 // Installer runs the install pipeline for a single app.
@@ -38,11 +39,33 @@ func (i *Installer) debugf(format string, args ...any) {
 	}
 }
 
+// githubTokenEnv are the environment variables consulted for a GitHub token
+// when the app config doesn't carry one, in order. Both are what the GitHub
+// CLI and most CI systems already set.
+var githubTokenEnv = []string{"GUPPY_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"}
+
+// githubToken returns the token to authenticate with.
+//
+// A token in the config file wins, since it is chosen per app. Otherwise the
+// environment is consulted, which keeps the credential out of a file on disk
+// and out of shell history — the two places --token used to leave it.
+func githubToken(configured string) string {
+	if configured != "" {
+		return configured
+	}
+	for _, key := range githubTokenEnv {
+		if v := os.Getenv(key); v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
 // NewRepository builds the repository client an app's config describes.
 func NewRepository(a *config.App, debug bool) (repository.Repository, error) {
 	switch a.Repository.Type {
 	case "github":
-		repo := repository.NewGitHubRepository(a.Repository.Owner, a.Repository.Repo, a.Repository.Token)
+		repo := repository.NewGitHubRepository(a.Repository.Owner, a.Repository.Repo, githubToken(a.Repository.Token))
 		if a.Repository.AssetName != "" {
 			repo.SetAssetName(a.Repository.AssetName)
 		}
@@ -58,8 +81,8 @@ func NewRepository(a *config.App, debug bool) (repository.Repository, error) {
 }
 
 // Check reports whether a newer release is available without installing it.
-func (i *Installer) Check(a *config.App) error {
-	latest, err := i.Repo.GetLatestRelease()
+func (i *Installer) Check(ctx context.Context, a *config.App) error {
+	latest, err := i.Repo.GetLatestRelease(ctx)
 	if err != nil {
 		return fmt.Errorf("error getting latest release: %w", err)
 	}
@@ -88,8 +111,8 @@ func (i *Installer) Check(a *config.App) error {
 // The order is deliberate: download and verify before running any hook, so a
 // network failure never leaves a pre_install hook's side effects (a stopped
 // service, a drained queue) behind with nothing installed.
-func (i *Installer) Install(a *config.App) error {
-	latest, err := i.Repo.GetLatestRelease()
+func (i *Installer) Install(ctx context.Context, a *config.App) error {
+	latest, err := i.Repo.GetLatestRelease(ctx)
 	if err != nil {
 		return fmt.Errorf("error getting latest release: %w", err)
 	}
@@ -118,6 +141,20 @@ func (i *Installer) Install(a *config.App) error {
 		return err
 	}
 
+	// Decide whether this release is trustworthy *before* fetching it. The
+	// feed names its own artifact URL, independently of the URL the feed was
+	// served from, so a https feed can still hand back a http artifact.
+	if !a.AllowUnverified {
+		if err := repository.ValidateURL(latest.DownloadURL); err != nil {
+			return err
+		}
+		if latest.Checksum == "" {
+			return fmt.Errorf("%s %s ships no checksum, so guppy cannot verify what it downloads; "+
+				"set allow_unverified: true in %s to install it anyway",
+				a.Name(), latest.Version, a.Path())
+		}
+	}
+
 	// Download.
 	i.printf("%s: downloading %s...\n", a.Name(), latest.Version)
 	if err := os.MkdirAll(downloadDir, 0755); err != nil {
@@ -125,7 +162,7 @@ func (i *Installer) Install(a *config.App) error {
 	}
 	downloadPath := filepath.Join(downloadDir, latest.FileName)
 	i.debugf("Computed download path: %s", downloadPath)
-	if err := i.Repo.Download(latest, downloadPath); err != nil {
+	if err := i.Repo.Download(ctx, latest, downloadPath); err != nil {
 		return fmt.Errorf("error downloading release: %w", err)
 	}
 	defer func() { _ = os.Remove(downloadPath) }()
@@ -140,9 +177,17 @@ func (i *Installer) Install(a *config.App) error {
 			_ = os.Remove(downloadPath)
 			return fmt.Errorf("checksum verification failed - file may be corrupted")
 		}
-		i.printf("%s: ✓ checksum verified\n", a.Name())
+		if algorithm := checksum.Algorithm(latest.Checksum); checksum.Weak(algorithm) {
+			i.printf("%s: ✓ checksum verified (%s — weak; ask the publisher for sha256)\n",
+				a.Name(), algorithm)
+		} else {
+			i.printf("%s: ✓ checksum verified\n", a.Name())
+		}
 	} else {
-		i.debugf("No checksum available for %s", latest.Version)
+		// Only reachable with allow_unverified set. Say so on stdout: a
+		// warning nobody sees without --debug is not a warning.
+		i.printf("%s: ⚠ installing %s unverified (no checksum; allow_unverified is set)\n",
+			a.Name(), latest.Version)
 	}
 
 	if err := os.MkdirAll(installDir, 0755); err != nil {
@@ -210,12 +255,11 @@ func Remove(a *config.App) error {
 	if err != nil {
 		return err
 	}
-	if err := UnlinkBins(binDir, a.Binaries()); err != nil {
-		return err
-	}
-
 	installDir, err := config.InstallDir(a.Name())
 	if err != nil {
+		return err
+	}
+	if err := UnlinkBins(binDir, installDir, a.Binaries()); err != nil {
 		return err
 	}
 	if err := os.RemoveAll(installDir); err != nil {

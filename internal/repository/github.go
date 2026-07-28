@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -8,10 +9,11 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
-	"github.com/jaredhaight/guppy/pkg/version"
+	"github.com/jaredhaight/guppy/internal/version"
 )
 
 // GitHubRepository implements Repository for GitHub releases
@@ -45,10 +47,54 @@ func (g *GitHubRepository) SetDebug(enabled bool) {
 }
 
 // debugLog prints a debug message if debug mode is enabled
-func (g *GitHubRepository) debugLog(format string, args ...interface{}) {
+func (g *GitHubRepository) debugLog(format string, args ...any) {
 	if g.debug {
 		fmt.Fprintf(os.Stderr, "[DEBUG] "+format+"\n", args...)
 	}
+}
+
+// setAuth attaches the token, if there is one.
+//
+// The token is never logged. Debug output routinely ends up in bug reports and
+// CI logs, and whether authentication was attached is the only part of this
+// that helps anyone debug a 401.
+func (g *GitHubRepository) setAuth(req *http.Request) {
+	if g.Token == "" {
+		return
+	}
+	req.Header.Set("Authorization", "token "+g.Token)
+	g.debugLog("Authorization header set (token redacted)")
+}
+
+// apiError turns a non-200 into something the user can act on. The raw body
+// for a rate-limit response is a wall of JSON that buries the one fact that
+// matters: wait, or authenticate.
+func (g *GitHubRepository) apiError(resp *http.Response) error {
+	if resp.StatusCode == http.StatusForbidden || resp.StatusCode == http.StatusTooManyRequests {
+		if resp.Header.Get("X-RateLimit-Remaining") == "0" {
+			msg := "GitHub API rate limit exceeded"
+			if reset := resetTime(resp.Header.Get("X-RateLimit-Reset")); !reset.IsZero() {
+				msg += fmt.Sprintf("; it resets at %s", reset.Local().Format("15:04:05"))
+			}
+			if g.Token == "" {
+				msg += ". Unauthenticated requests are limited to 60/hour — set GH_TOKEN or GITHUB_TOKEN to raise it"
+			}
+			return fmt.Errorf("%s", msg)
+		}
+	}
+
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
+	return fmt.Errorf("GitHub API returned status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+}
+
+// resetTime parses the X-RateLimit-Reset epoch header, returning the zero time
+// if it is absent or malformed.
+func resetTime(header string) time.Time {
+	seconds, err := strconv.ParseInt(header, 10, 64)
+	if err != nil {
+		return time.Time{}
+	}
+	return time.Unix(seconds, 0)
 }
 
 // githubAsset represents a single downloadable file attached to a release
@@ -68,11 +114,11 @@ type githubRelease struct {
 }
 
 // GetLatestRelease returns the latest release from GitHub
-func (g *GitHubRepository) GetLatestRelease() (*Release, error) {
+func (g *GitHubRepository) GetLatestRelease(ctx context.Context) (*Release, error) {
 	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/releases/latest", g.Owner, g.Repo)
 	g.debugLog("Fetching latest release from URL: %s", url)
 
-	req, err := http.NewRequest("GET", url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("error creating request: %w", err)
 	}
@@ -80,11 +126,7 @@ func (g *GitHubRepository) GetLatestRelease() (*Release, error) {
 	req.Header.Set("User-Agent", "guppy-updater")
 	req.Header.Set("Accept", "application/vnd.github.v3+json")
 
-	if g.Token != "" {
-		authValue := fmt.Sprintf("token %s", g.Token)
-		req.Header.Set("Authorization", authValue)
-		g.debugLog("Request header set: Authorization: %s", authValue)
-	}
+	g.setAuth(req)
 
 	resp, err := g.httpClient.Do(req)
 	if err != nil {
@@ -93,55 +135,11 @@ func (g *GitHubRepository) GetLatestRelease() (*Release, error) {
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("GitHub API returned status %d: %s", resp.StatusCode, string(body))
+		return nil, g.apiError(resp)
 	}
 
 	var ghRelease githubRelease
-	if err := json.NewDecoder(resp.Body).Decode(&ghRelease); err != nil {
-		return nil, fmt.Errorf("error decoding response: %w", err)
-	}
-
-	return g.convertGitHubRelease(&ghRelease)
-}
-
-// GetRelease returns a specific release by version
-func (g *GitHubRepository) GetRelease(version string) (*Release, error) {
-	// Ensure version has 'v' prefix for GitHub tags
-	if !strings.HasPrefix(version, "v") {
-		version = "v" + version
-	}
-
-	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/releases/tags/%s", g.Owner, g.Repo, version)
-	g.debugLog("Fetching release for version %s from URL: %s", version, url)
-
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		return nil, fmt.Errorf("error creating request: %w", err)
-	}
-
-	req.Header.Set("User-Agent", "guppy-updater")
-	req.Header.Set("Accept", "application/vnd.github.v3+json")
-
-	if g.Token != "" {
-		authValue := fmt.Sprintf("token %s", g.Token)
-		req.Header.Set("Authorization", authValue)
-		g.debugLog("Request header set: Authorization: %s", authValue)
-	}
-
-	resp, err := g.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("error fetching release: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("GitHub API returned status %d: %s", resp.StatusCode, string(body))
-	}
-
-	var ghRelease githubRelease
-	if err := json.NewDecoder(resp.Body).Decode(&ghRelease); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, MaxFeedBytes)).Decode(&ghRelease); err != nil {
 		return nil, fmt.Errorf("error decoding response: %w", err)
 	}
 
@@ -154,7 +152,7 @@ func (g *GitHubRepository) CompareVersions(current, latest string) (bool, error)
 }
 
 // Download downloads a release to the specified destination
-func (g *GitHubRepository) Download(release *Release, dest string) error {
+func (g *GitHubRepository) Download(ctx context.Context, release *Release, dest string) error {
 	if release.DownloadURL == "" {
 		return fmt.Errorf("no download URL in release")
 	}
@@ -166,7 +164,7 @@ func (g *GitHubRepository) Download(release *Release, dest string) error {
 	}
 	g.debugLog("Downloading from URL: %s to %s", release.DownloadURL, dest)
 
-	req, err := http.NewRequest("GET", release.DownloadURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, release.DownloadURL, nil)
 	if err != nil {
 		return fmt.Errorf("error creating download request: %w", err)
 	}
@@ -175,11 +173,7 @@ func (g *GitHubRepository) Download(release *Release, dest string) error {
 	req.Header.Set("User-Agent", "guppy-updater")
 	req.Header.Set("Accept", "application/octet-stream")
 
-	if g.Token != "" {
-		authValue := fmt.Sprintf("token %s", g.Token)
-		req.Header.Set("Authorization", authValue)
-		g.debugLog("Request header set: Authorization: %s", authValue)
-	}
+	g.setAuth(req)
 
 	resp, err := g.httpClient.Do(req)
 	if err != nil {
@@ -204,9 +198,10 @@ func (g *GitHubRepository) Download(release *Release, dest string) error {
 	}
 	defer func() { _ = out.Close() }()
 
-	// Copy the content
-	_, err = io.Copy(out, resp.Body)
-	if err != nil {
+	// Copy the content, bounded: the server decides how much it sends.
+	if _, err := copyLimited(out, resp.Body, MaxDownloadBytes, "download"); err != nil {
+		_ = out.Close()
+		_ = os.Remove(dest)
 		return fmt.Errorf("error writing to destination: %w", err)
 	}
 
@@ -254,6 +249,11 @@ func (g *GitHubRepository) convertGitHubRelease(ghRelease *githubRelease) (*Rele
 
 	if checksum == "" {
 		g.debugLog("WARNING: No checksum available for asset %s", fileName)
+	}
+
+	// The asset name is whatever the API said it was, and it becomes a path.
+	if err := ValidateFileName(fileName); err != nil {
+		return nil, err
 	}
 
 	return &Release{

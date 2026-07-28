@@ -27,9 +27,9 @@ Guppy currently supports two update providers: Github and HTTP. The github provi
 ]
 ```
 
-This can either be a file stored on a webserver or storage account (http://example.com/release.json) or a regular API endpoint (http://example.com/updates/)
+This can either be a file stored on a webserver or storage account (https://example.com/release.json) or a regular API endpoint (https://example.com/updates/). URLs must be `https` — see [Verification](USAGE.md#verification).
 
-The md5, sha1, and sha256 hash values are all optional. While you can specify more than one hashing algorithm if you'd like, Guppy will use only the most secure hashing algorithm by default (sha256 > sha1 > md5)
+Supply at least one of md5, sha1, or sha256. Guppy uses the strongest one present (sha256 > sha1 > md5) and refuses to install a release that carries none, since it has no way to tell a genuine artifact from a substituted one. Prefer sha256: md5 and sha1 are both broken against deliberate collisions and are supported only for compatibility with existing feeds.
 
 # Getting started
 
@@ -97,7 +97,7 @@ bin:
 ```yaml
 repository:
   type: http
-  url: http://www.example.com/releases
+  url: https://www.example.com/releases
 current_version: v2025.1107.8
 applier: binary
 ```

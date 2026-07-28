@@ -6,7 +6,6 @@ import (
 	"compress/gzip"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -137,16 +136,6 @@ func createTestTarGzWithDir(t *testing.T, tarPath string) {
 	}
 	if _, err := tarWriter.Write([]byte(fileContent)); err != nil {
 		t.Fatalf("Failed to write file content: %v", err)
-	}
-}
-
-func TestNewArchiveApplier(t *testing.T) {
-	applier := NewArchiveApplier()
-	if applier == nil {
-		t.Fatal("NewArchiveApplier() returned nil")
-	}
-	if applier.ExtractPath != "" {
-		t.Errorf("NewArchiveApplier() ExtractPath = %q, want empty", applier.ExtractPath)
 	}
 }
 
@@ -349,7 +338,7 @@ func TestArchiveApplier_Apply_DefaultExtractPath(t *testing.T) {
 	// Don't set ExtractPath, should extract to directory containing target
 	targetPath := filepath.Join(tempDir, "target.bin")
 
-	applier := NewArchiveApplier()
+	applier := &ArchiveApplier{}
 	err := applier.Apply(zipPath, targetPath)
 	if err != nil {
 		t.Fatalf("Apply() failed: %v", err)
@@ -375,7 +364,7 @@ func TestArchiveApplier_Apply_UnsupportedFormat(t *testing.T) {
 		t.Fatalf("Failed to create test file: %v", err)
 	}
 
-	applier := NewArchiveApplier()
+	applier := &ArchiveApplier{}
 	err := applier.Apply(unsupportedPath, filepath.Join(tempDir, "target"))
 
 	if err == nil {
@@ -583,52 +572,6 @@ func TestArchiveApplier_Apply_NestedDirectories(t *testing.T) {
 	}
 }
 
-func TestArchiveApplier_ExtractZipFile_Permissions(t *testing.T) {
-	tempDir := t.TempDir()
-
-	// Create ZIP with executable file
-	zipPath := filepath.Join(tempDir, "executable.zip")
-	zipFile, err := os.Create(zipPath)
-	if err != nil {
-		t.Fatalf("Failed to create zip: %v", err)
-	}
-	defer func() { _ = zipFile.Close() }()
-
-	zipWriter := zip.NewWriter(zipFile)
-	header := &zip.FileHeader{
-		Name:   "script.sh",
-		Method: zip.Deflate,
-	}
-	header.SetMode(0755) // Executable
-	writer, _ := zipWriter.CreateHeader(header)
-	_, _ = writer.Write([]byte("#!/bin/bash\necho hello"))
-	_ = zipWriter.Close()
-
-	extractDir := filepath.Join(tempDir, "extract")
-	if err := os.Mkdir(extractDir, 0755); err != nil {
-		t.Fatalf("Failed to create extract directory: %v", err)
-	}
-
-	applier := &ArchiveApplier{ExtractPath: extractDir}
-	err = applier.Apply(zipPath, filepath.Join(extractDir, "dummy"))
-	if err != nil {
-		t.Fatalf("Apply() failed: %v", err)
-	}
-
-	// Verify file has executable permissions (Unix only)
-	scriptPath := filepath.Join(extractDir, "script.sh")
-	info, err := os.Stat(scriptPath)
-	if err != nil {
-		t.Fatalf("Failed to stat extracted file: %v", err)
-	}
-
-	// On Unix systems, check if file is executable
-	mode := info.Mode()
-	if mode&0111 == 0 {
-		t.Logf("Warning: Extracted file may not preserve executable bit: mode=%v", mode)
-	}
-}
-
 // TestArchiveApplier_SymlinkHandling tests that symlinks in TAR archives are safely skipped
 func TestArchiveApplier_SymlinkHandling_Tar(t *testing.T) {
 	tempDir := t.TempDir()
@@ -783,40 +726,21 @@ func TestArchiveApplier_SymlinkHandling_Zip(t *testing.T) {
 	err = applier.Apply(zipPath, filepath.Join(extractDir, "dummy"))
 
 	// Note: Current implementation may extract symlinks from ZIP files
-	// This test documents the current behavior
 	if err != nil {
-		// If extraction fails, that's actually safer
-		t.Logf("Extraction failed (which is safe): %v", err)
-		return
+		t.Fatalf("Apply() failed: %v", err)
 	}
 
-	// Verify regular file was extracted
-	regularPath := filepath.Join(extractDir, "regular.txt")
-	if _, err := os.Stat(regularPath); err != nil {
+	// Regular files still come out.
+	if _, err := os.Stat(filepath.Join(extractDir, "regular.txt")); err != nil {
 		t.Errorf("Regular file was not extracted: %v", err)
 	}
 
-	// Check if symlinks were extracted (documenting behavior)
-	linkPath := filepath.Join(extractDir, "link.txt")
-	linkInfo, linkErr := os.Lstat(linkPath)
-	if linkErr == nil {
-		// Symlink was extracted - check if it's actually a symlink
-		if linkInfo.Mode()&os.ModeSymlink != 0 {
-			t.Logf("Warning: ZIP extractor created a symlink (potential security concern)")
-			// Verify it doesn't escape the extract directory
-			target, err := os.Readlink(linkPath)
-			if err == nil {
-				resolvedPath := filepath.Join(extractDir, target)
-				cleanedPath := filepath.Clean(resolvedPath)
-				if !filepath.IsAbs(target) {
-					// Relative symlink - check it stays within extract dir
-					if !strings.HasPrefix(cleanedPath, filepath.Clean(extractDir)) {
-						t.Errorf("Symlink escapes extraction directory: %s -> %s", linkPath, target)
-					}
-				} else {
-					t.Errorf("Absolute symlink created (security risk): %s -> %s", linkPath, target)
-				}
-			}
+	// Symlink entries are skipped outright. A zip symlink stores its target as
+	// the entry body, so extracting one either creates a real link that can
+	// escape, or a file whose contents are a path — neither is wanted.
+	for _, name := range []string{"link.txt", "malicious.txt"} {
+		if _, err := os.Lstat(filepath.Join(extractDir, name)); err == nil {
+			t.Errorf("symlink entry %q was extracted; it should have been skipped", name)
 		}
 	}
 }

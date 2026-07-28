@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -372,7 +373,7 @@ func TestGitHubRepository_GetLatestRelease(t *testing.T) {
 			}
 
 			// Call GetLatestRelease
-			release, err := repo.GetLatestRelease()
+			release, err := repo.GetLatestRelease(context.Background())
 
 			// Check error expectation
 			if tt.wantErr {
@@ -398,115 +399,6 @@ func TestGitHubRepository_GetLatestRelease(t *testing.T) {
 
 			if release.DownloadURL == "" {
 				t.Error("GetLatestRelease() downloadURL is empty")
-			}
-		})
-	}
-}
-
-func TestGitHubRepository_GetRelease(t *testing.T) {
-	tests := []struct {
-		name           string
-		version        string
-		responseStatus int
-		responseBody   interface{}
-		wantErr        bool
-		wantVersion    string
-		expectedPath   string
-	}{
-		{
-			name:           "get specific version with v prefix",
-			version:        "v1.0.0",
-			responseStatus: http.StatusOK,
-			responseBody: githubRelease{
-				TagName:     "v1.0.0",
-				Name:        "Release v1.0.0",
-				PublishedAt: time.Now(),
-				Assets: []githubAsset{
-					{
-						ID:                 123,
-						Name:               "app",
-						BrowserDownloadURL: "https://github.com/owner/repo/releases/download/v1.0.0/app",
-						Digest:             "sha256:abc123",
-					},
-				},
-			},
-			wantErr:      false,
-			wantVersion:  "v1.0.0",
-			expectedPath: "/repos/owner/repo/releases/tags/v1.0.0",
-		},
-		{
-			name:           "get specific version without v prefix",
-			version:        "2.5.0",
-			responseStatus: http.StatusOK,
-			responseBody: githubRelease{
-				TagName:     "v2.5.0",
-				Name:        "Release v2.5.0",
-				PublishedAt: time.Now(),
-				Assets: []githubAsset{
-					{
-						ID:                 456,
-						Name:               "app",
-						BrowserDownloadURL: "https://github.com/owner/repo/releases/download/v2.5.0/app",
-						Digest:             "sha256:def456",
-					},
-				},
-			},
-			wantErr:      false,
-			wantVersion:  "v2.5.0",
-			expectedPath: "/repos/owner/repo/releases/tags/v2.5.0",
-		},
-		{
-			name:           "version not found",
-			version:        "v99.99.99",
-			responseStatus: http.StatusNotFound,
-			responseBody:   map[string]string{"message": "Not Found"},
-			wantErr:        true,
-			expectedPath:   "/repos/owner/repo/releases/tags/v99.99.99",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Create test server
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				// Verify the correct endpoint was called
-				if tt.expectedPath != "" && r.URL.Path != tt.expectedPath {
-					t.Errorf("Expected path %q, got %q", tt.expectedPath, r.URL.Path)
-				}
-
-				w.WriteHeader(tt.responseStatus)
-
-				if tt.responseStatus == http.StatusOK {
-					_ = json.NewEncoder(w).Encode(tt.responseBody)
-				} else {
-					_ = json.NewEncoder(w).Encode(tt.responseBody)
-				}
-			}))
-			defer server.Close()
-
-			repo := NewGitHubRepository("owner", "repo", "")
-			repo.httpClient = &http.Client{
-				Transport: &mockTransport{
-					serverURL: server.URL,
-				},
-			}
-
-			release, err := repo.GetRelease(tt.version)
-
-			if tt.wantErr {
-				if err == nil {
-					t.Errorf("GetRelease() expected error, got nil")
-				}
-				return
-			}
-
-			if err != nil {
-				t.Errorf("GetRelease() unexpected error: %v", err)
-				return
-			}
-
-			if release.Version != tt.wantVersion {
-				t.Errorf("GetRelease() version = %q, want %q", release.Version, tt.wantVersion)
 			}
 		})
 	}
@@ -596,7 +488,7 @@ func TestGitHubRepository_Download(t *testing.T) {
 				tempDir := t.TempDir()
 				dest := filepath.Join(tempDir, "downloaded")
 
-				err := repo.Download(tt.release, dest)
+				err := repo.Download(context.Background(), tt.release, dest)
 				if !tt.wantErr {
 					t.Errorf("Download() expected no error, got %v", err)
 				}
@@ -639,7 +531,7 @@ func TestGitHubRepository_Download(t *testing.T) {
 			tempDir := t.TempDir()
 			dest := filepath.Join(tempDir, "downloaded")
 
-			err := repo.Download(tt.release, dest)
+			err := repo.Download(context.Background(), tt.release, dest)
 
 			if tt.wantErr {
 				if err == nil {

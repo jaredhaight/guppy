@@ -2,12 +2,14 @@ package main
 
 import (
 	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/jaredhaight/guppy/internal/config"
+	"github.com/spf13/cobra"
 )
 
 // testRoot points config and data at a temp dir so tests never touch the real
@@ -20,39 +22,33 @@ func testRoot(t *testing.T) {
 }
 
 // run executes guppy with the given arguments, returning everything written to
-// stdout. Output goes through fmt.Printf rather than cobra's writer, so stdout
-// is swapped for a pipe.
+// stdout and stderr.
+//
+// Each call builds a fresh command tree, so there is no flag state to reset
+// between cases and no need to redirect the process's own stdout.
 func run(t *testing.T, args ...string) (string, error) {
 	t.Helper()
 
-	// Cobra keeps flag values in package-level vars between runs.
-	resetFlags()
-
-	old := os.Stdout
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatalf("failed to create pipe: %v", err)
-	}
-	os.Stdout = w
-
-	rootCmd.SetArgs(args)
-	runErr := rootCmd.Execute()
-
-	_ = w.Close()
-	os.Stdout = old
-
 	var buf bytes.Buffer
-	if _, err := buf.ReadFrom(r); err != nil {
-		t.Fatalf("failed to read captured output: %v", err)
-	}
-	return buf.String(), runErr
+	cmd := newRootCmd()
+	cmd.SetOut(&buf)
+	cmd.SetErr(&buf)
+	cmd.SetIn(strings.NewReader(""))
+	cmd.SetArgs(args)
+
+	// Execute first: return operands are evaluated left to right, so reading
+	// the buffer in the return statement would read it before the command ran.
+	err := cmd.Execute()
+	return buf.String(), err
 }
 
-func resetFlags() {
-	configDir, debug, intervalFlag = "", false, ""
-	addName, addApplier, addAsset, addToken, addURL = "", "binary", "", "", ""
-	addBin, addPreInstall, addPostInstall = nil, nil, nil
-	removeYes = false
+// testCLI returns a cli and a command whose output goes nowhere visible, for
+// the helpers that are exercised directly rather than through run().
+func testCLI() (*cli, *cobra.Command) {
+	cmd := newRootCmd()
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	return &cli{}, cmd
 }
 
 func TestAddGitHub(t *testing.T) {
@@ -263,6 +259,51 @@ func TestRemoveCmd(t *testing.T) {
 	}
 }
 
+// The confirmation prompt reads from the command's input rather than the
+// process's stdin, which is both why it is testable and how a "no" answer is
+// honored.
+func TestRemoveConfirmationPrompt(t *testing.T) {
+	tests := []struct {
+		name    string
+		answer  string
+		removed bool
+	}{
+		{"y confirms", "y\n", true},
+		{"uppercase Y confirms", "Y\n", true},
+		{"n declines", "n\n", false},
+		{"empty declines", "\n", false},
+		{"anything else declines", "yes please\n", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			testRoot(t)
+			if _, err := run(t, "add", "owner/repo"); err != nil {
+				t.Fatalf("add error: %v", err)
+			}
+
+			var buf bytes.Buffer
+			cmd := newRootCmd()
+			cmd.SetOut(&buf)
+			cmd.SetErr(&buf)
+			cmd.SetIn(strings.NewReader(tt.answer))
+			cmd.SetArgs([]string{"remove", "repo"})
+			if err := cmd.Execute(); err != nil {
+				t.Fatalf("remove error: %v", err)
+			}
+
+			_, err := config.AppPath("repo")
+			gone := err != nil
+			if gone != tt.removed {
+				t.Errorf("answer %q: removed = %v, want %v (output: %s)", tt.answer, gone, tt.removed, buf.String())
+			}
+			if !tt.removed && !strings.Contains(buf.String(), "Cancelled") {
+				t.Errorf("answer %q: output = %q, want a cancellation notice", tt.answer, buf.String())
+			}
+		})
+	}
+}
+
 func TestRemoveMissingApp(t *testing.T) {
 	testRoot(t)
 
@@ -331,7 +372,8 @@ func TestForEachAppContinuesPastFailures(t *testing.T) {
 	}
 
 	var seen []string
-	err := forEachApp([]string{"alpha", "beta", "gamma"}, func(a *config.App) error {
+	c, cmd := testCLI()
+	err := c.forEachApp(cmd, []string{"alpha", "beta", "gamma"}, func(a *config.App) error {
 		seen = append(seen, a.Name())
 		if a.Name() == "beta" {
 			return os.ErrInvalid
@@ -366,7 +408,8 @@ func TestForEachAppReportsUnloadableApps(t *testing.T) {
 	}
 
 	called := false
-	err = forEachApp([]string{"broken"}, func(a *config.App) error {
+	c, cmd := testCLI()
+	err = c.forEachApp(cmd, []string{"broken"}, func(a *config.App) error {
 		called = true
 		return nil
 	})
@@ -396,7 +439,7 @@ func TestReserved(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := reserved(tt.name); got != tt.want {
+			if got := reserved(newRootCmd(), tt.name); got != tt.want {
 				t.Errorf("reserved(%q) = %v, want %v", tt.name, got, tt.want)
 			}
 		})
@@ -417,28 +460,23 @@ func TestOnPath(t *testing.T) {
 	}
 }
 
-func TestDebugLog(t *testing.T) {
-	oldStderr := os.Stderr
-	r, w, _ := os.Pipe()
-	os.Stderr = w
-
-	debug = true
-	debugLog("test message: %s", "hello")
-	debug = false
-	debugLog("should not appear")
-
-	_ = w.Close()
-	os.Stderr = oldStderr
-
+func TestDebugf(t *testing.T) {
 	var buf bytes.Buffer
-	_, _ = buf.ReadFrom(r)
-	output := buf.String()
+	cmd := newRootCmd()
+	cmd.SetErr(&buf)
 
+	c := &cli{debug: true}
+	c.debugf(cmd, "test message: %s", "hello")
+
+	c.debug = false
+	c.debugf(cmd, "should not appear")
+
+	output := buf.String()
 	if !strings.Contains(output, "[DEBUG] test message: hello") {
-		t.Error("debugLog() should output a message when debug is enabled")
+		t.Errorf("debugf() output = %q, want the message when debug is on", output)
 	}
 	if strings.Contains(output, "should not appear") {
-		t.Error("debugLog() should stay silent when debug is disabled")
+		t.Errorf("debugf() output = %q, want nothing when debug is off", output)
 	}
 }
 

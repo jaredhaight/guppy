@@ -12,6 +12,16 @@ cd guppy
 go build -o guppy ./cmd/guppy
 ```
 
+### Verifying a downloaded release
+
+Guppy's own releases are built by GitHub Actions and carry a signed provenance attestation, so you can confirm a binary came from this repository rather than trusting the download:
+
+```bash
+gh attestation verify guppy-linux-amd64 --repo jaredhaight/guppy
+```
+
+Guppy asks the same of the software it installs, so it's worth applying to guppy itself. The `checksums.txt` published alongside the binaries is a convenience, not evidence — it's unsigned, and anyone able to replace a binary can replace it too.
+
 Then add guppy's bin folder to your PATH:
 
 ```bash
@@ -90,7 +100,7 @@ guppy add --url https://example.com/releases.json --name myapp
 | `--applier` | `binary` (default) or `archive` |
 | `--bin` | A binary to link into the bin folder. Repeatable |
 | `--asset` | Which release asset to download, by name or pattern |
-| `--token` | GitHub token, for private repos or higher rate limits |
+| `--token` | GitHub token, for private repos or higher rate limits. Prefer `GH_TOKEN` in the environment |
 | `--url` | Release feed URL, for the http provider |
 | `--pre-install` | Shell command to run before installing. Repeatable |
 | `--post-install` | Shell command to run after installing. Repeatable |
@@ -159,7 +169,9 @@ guppy --interval 6h
 guppy --interval 01:30:00
 ```
 
-Press Ctrl+C to stop. Guppy also stops cleanly on SIGTERM, so it works under systemd.
+Press Ctrl+C to stop — that also aborts a download in progress rather than waiting for it to finish. Guppy stops cleanly on SIGTERM too, so it works under systemd.
+
+The shortest accepted interval is 5 minutes. Each tick costs at least one API call per app, and GitHub allows 60 an hour unauthenticated, so a shorter interval gets you rate-limited rather than updated.
 
 ## Configuration
 
@@ -191,7 +203,7 @@ For `type: github`:
 |---|---|---|
 | `owner` | yes | Repository owner |
 | `repo` | yes | Repository name |
-| `token` | no | Personal access token, for private repos or higher rate limits |
+| `token` | no | Personal access token, for private repos or higher rate limits. Overrides `GH_TOKEN`/`GITHUB_TOKEN` from the environment |
 | `asset_name` | no | Which asset to download. Defaults to the first one. See below |
 
 For `type: http`:
@@ -242,6 +254,10 @@ ripgrep-14.1.1-x86_64-apple-darwin/rg
 Writing `bin: [rg]` finds that no matter what the version directory is called. If a name turns out to be ambiguous, guppy tells you which files matched so you can give the relative path instead.
 
 Binaries are linked, not copied, and guppy makes them executable — archives don't always record the executable bit.
+
+### allow_unverified
+
+Drops guppy's integrity requirements for this one app: plain-HTTP URLs are accepted, and so are releases that ship no checksum. Guppy warns on every unverified install. Defaults to `false`. See [Verification](#verification).
 
 ### pre_install and post_install
 
@@ -298,7 +314,14 @@ guppy add BurntSushi/ripgrep --applier archive --bin rg --asset 'x86_64-unknown-
 guppy add myorg/internal-tool --token github_pat_xxxxxxxxxxxx
 ```
 
-Prefer editing `token` into the config file over passing it on the command line, so it doesn't land in your shell history.
+Better still, don't put it anywhere on disk. Guppy reads `GUPPY_GITHUB_TOKEN`, `GH_TOKEN` and `GITHUB_TOKEN` (in that order) when an app config has no `token` of its own, so the same variable the GitHub CLI and CI already set works here:
+
+```bash
+export GH_TOKEN=github_pat_xxxxxxxxxxxx
+guppy add myorg/internal-tool
+```
+
+A `token` in the config file takes precedence, since it's chosen per app. Config files are written `0600` because of it. `--token` still works but leaves the credential in your shell history, so prefer the environment.
 
 ### Example 4: A service that needs restarting
 
@@ -364,14 +387,32 @@ Restart=on-failure
 WantedBy=default.target
 ```
 
-## Checksum Verification
+## Verification
 
-Guppy verifies downloads whenever the release provides a checksum.
+Guppy installs binaries onto your `PATH`, so it refuses to install anything it can't verify.
 
 - **GitHub** supplies a SHA256 digest for release assets automatically.
-- **HTTP** feeds may include `md5`, `sha1` and/or `sha256`. Guppy uses the strongest one available (sha256 > sha1 > md5).
+- **HTTP** feeds may include `md5`, `sha1` and/or `sha256`. Guppy uses the strongest one available (sha256 > sha1 > md5), and says so when it had to fall back — MD5 and SHA-1 are broken against deliberate collisions, so an attacker who can choose the artifact can also choose one that matches.
 
-A download that fails verification is deleted and the install stops. If a release carries no checksum at all, guppy installs it and notes this under `--debug`.
+Two requirements, both enforced before anything is downloaded:
+
+1. **URLs must be `https`.** This covers both the feed URL and the artifact URL the feed points at — they're set separately, so a secure feed can still hand back an insecure download. `localhost` and loopback addresses are exempt.
+2. **The release must carry a checksum.** A download that fails verification is deleted and the install stops.
+
+Both matter together rather than separately: over plain HTTP, anyone who can rewrite the download can rewrite the checksum alongside it, so verification proves nothing.
+
+### Overriding this
+
+If you're installing from a source that can't meet either requirement, set `allow_unverified` on that app:
+
+```yaml
+repository:
+  type: http
+  url: http://internal-host.lan/releases.json
+allow_unverified: true
+```
+
+Guppy will then install from plain-HTTP URLs and accept releases with no checksum, printing a warning each time it does. It's per app, never global — you're saying you trust that specific source, not switching the protection off.
 
 ## Supported Archive Formats
 
