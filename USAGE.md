@@ -30,6 +30,8 @@ export PATH="$(guppy bin):$PATH"
 
 Put that line in your shell profile (`~/.zshrc`, `~/.bashrc`) to make it permanent.
 
+Guppy can keep itself current too — see [Example 1](#example-1-a-binary-release-from-github).
+
 ## Where guppy keeps things
 
 Guppy uses the standard configuration and data locations for your operating system.
@@ -118,6 +120,7 @@ guppy check
 ```
 fd: ✓ up to date (10.2.0)
 ripgrep: 🎉 14.1.1 available (current 14.0.3)
+zoxide: 0.9.6 available (not installed)
 ```
 
 ### guppy add
@@ -154,7 +157,7 @@ ripgrep                  14.1.1         BurntSushi/ripgrep
 
 ### guppy remove
 
-Deletes the app's config, its install directory, and its bin links. Asks for confirmation unless you pass `--yes`.
+Deletes the app's config, its install directory, and its bin links. Asks for confirmation unless you pass `--yes`. Also spelled `rm`.
 
 ```bash
 guppy remove ripgrep
@@ -240,8 +243,10 @@ Where releases come from. `type` is `github`, which is also the default and curr
 |---|---|---|
 | `owner` | yes | Repository owner |
 | `repo` | yes | Repository name |
-| `token` | no | Personal access token, for private repos or higher rate limits. Overrides `GH_TOKEN`/`GITHUB_TOKEN` from the environment |
+| `token` | no | Personal access token, for private repos or higher rate limits. Overrides `GUPPY_GITHUB_TOKEN`/`GH_TOKEN`/`GITHUB_TOKEN` from the environment |
 | `asset_name` | no | Which asset to download. Defaults to the first one. See below |
+
+Older configs that pointed at an arbitrary release feed with `repository.url` no longer load — that provider is gone. Replace the `url` with `owner` and `repo`; guppy's error says as much when it finds one.
 
 #### asset_name
 
