@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -34,6 +35,12 @@ func run(t *testing.T, args ...string) (string, error) {
 	cmd.SetOut(&buf)
 	cmd.SetErr(&buf)
 	cmd.SetIn(strings.NewReader(""))
+
+	// Never nil: cobra reads os.Args when SetArgs is given nil, which would
+	// hand the test binary's own flags to guppy.
+	if args == nil {
+		args = []string{}
+	}
 	cmd.SetArgs(args)
 
 	// Execute first: return operands are evaluated left to right, so reading
@@ -418,6 +425,8 @@ func TestReserved(t *testing.T) {
 	}{
 		{"list", true},
 		{"add", true},
+		{"install", true},
+		{"update", true},
 		{"remove", true},
 		{"rm", true}, // alias
 		{"check", true},
@@ -433,6 +442,260 @@ func TestReserved(t *testing.T) {
 				t.Errorf("reserved(%q) = %v, want %v", tt.name, got, tt.want)
 			}
 		})
+	}
+
+	// Cobra adds `completion` and `help` while executing, not while the tree
+	// is built, so those two are only reserved along the real path.
+	t.Run("commands cobra adds during execute", func(t *testing.T) {
+		for _, name := range []string{"completion", "help"} {
+			testRoot(t)
+			_, err := run(t, "add", "owner/"+name)
+			if err == nil {
+				t.Errorf("add owner/%s succeeded, want it rejected as a guppy command", name)
+				continue
+			}
+			if !strings.Contains(err.Error(), "is a guppy command") {
+				t.Errorf("add owner/%s error = %v, want a shadowing error", name, err)
+			}
+		}
+	})
+}
+
+// A bare guppy used to update every app. It explains itself instead.
+func TestBareGuppyPrintsHelp(t *testing.T) {
+	testRoot(t)
+
+	out, err := run(t)
+	if err != nil {
+		t.Fatalf("bare guppy error: %v", err)
+	}
+	for _, want := range []string{"Available Commands", "install", "update"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("bare guppy output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+// The old `guppy <app>` form has to fail rather than silently do nothing.
+func TestUnknownCommandIsAnError(t *testing.T) {
+	testRoot(t)
+
+	_, err := run(t, "ripgrep")
+	if err == nil {
+		t.Fatal("guppy ripgrep succeeded, want an unknown-command error")
+	}
+	if !strings.Contains(err.Error(), "unknown command") {
+		t.Errorf("error = %v, want an unknown-command error", err)
+	}
+}
+
+// --interval belongs to update now, not to the root.
+func TestRootRejectsIntervalFlag(t *testing.T) {
+	testRoot(t)
+
+	if _, err := run(t, "--interval", "1h"); err == nil {
+		t.Fatal("guppy --interval succeeded, want the flag to have moved to update")
+	}
+
+	// And update still accepts it. A bad value proves it parsed the flag
+	// rather than reaching the network.
+	_, err := run(t, "update", "--interval", "not-a-duration")
+	if err == nil {
+		t.Fatal("update --interval accepted a bad duration")
+	}
+	if !strings.Contains(err.Error(), "interval") {
+		t.Errorf("error = %v, want it to name the interval", err)
+	}
+}
+
+// installTarget is the part of install that decides what to install, and
+// whether it has to be added first. Exercised directly so the tests stay off
+// the network.
+func newInstallTarget() (*cli, *addFlags, *cobra.Command) {
+	f := &addFlags{}
+	cmd := &cobra.Command{Use: "install"}
+	cmd.SetOut(io.Discard)
+	f.register(cmd)
+	return &cli{}, f, cmd
+}
+
+func TestInstallTargetAddsRepo(t *testing.T) {
+	testRoot(t)
+
+	c, f, cmd := newInstallTarget()
+	if err := cmd.Flags().Set("bin", "rg"); err != nil {
+		t.Fatalf("failed to set --bin: %v", err)
+	}
+
+	name, err := c.installTarget(cmd, f, "BurntSushi/ripgrep")
+	if err != nil {
+		t.Fatalf("installTarget() error: %v", err)
+	}
+	if name != "ripgrep" {
+		t.Errorf("installTarget() = %q, want the repo name", name)
+	}
+
+	a, err := config.LoadApp("ripgrep")
+	if err != nil {
+		t.Fatalf("installTarget() did not write a config: %v", err)
+	}
+	if a.Repository.Owner != "BurntSushi" || len(a.Bin) != 1 || a.Bin[0] != "rg" {
+		t.Errorf("config = %+v, want the flags applied", a)
+	}
+}
+
+func TestInstallTargetPassesThroughAppName(t *testing.T) {
+	testRoot(t)
+
+	if _, err := run(t, "add", "owner/repo"); err != nil {
+		t.Fatalf("add error: %v", err)
+	}
+
+	c, f, cmd := newInstallTarget()
+	name, err := c.installTarget(cmd, f, "repo")
+	if err != nil {
+		t.Fatalf("installTarget() error: %v", err)
+	}
+	if name != "repo" {
+		t.Errorf("installTarget() = %q, want the name unchanged", name)
+	}
+}
+
+func TestInstallTargetErrors(t *testing.T) {
+	tests := []struct {
+		name    string
+		arg     string
+		setFlag bool
+		want    string
+	}{
+		{
+			name: "repo guppy already manages",
+			arg:  "owner/repo",
+			want: "guppy update repo",
+		},
+		{
+			name:    "app flags given with an app name",
+			arg:     "repo",
+			setFlag: true,
+			want:    "already has a config",
+		},
+		{
+			name: "malformed repo spec",
+			arg:  "owner/",
+			want: "expected owner/repo",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			testRoot(t)
+			if _, err := run(t, "add", "owner/repo"); err != nil {
+				t.Fatalf("add error: %v", err)
+			}
+
+			c, f, cmd := newInstallTarget()
+			if tt.setFlag {
+				if err := cmd.Flags().Set("applier", "archive"); err != nil {
+					t.Fatalf("failed to set --applier: %v", err)
+				}
+			}
+
+			_, err := c.installTarget(cmd, f, tt.arg)
+			if err == nil {
+				t.Fatalf("installTarget(%q) succeeded, want an error", tt.arg)
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("error = %v, want it to mention %q", err, tt.want)
+			}
+		})
+	}
+}
+
+// The split between install and update invites this, so it gets a real answer.
+func TestUpdateRejectsOwnerRepo(t *testing.T) {
+	testRoot(t)
+
+	_, err := run(t, "update", "BurntSushi/ripgrep")
+	if err == nil {
+		t.Fatal("update accepted an owner/repo argument")
+	}
+	if !strings.Contains(err.Error(), "guppy install") {
+		t.Errorf("error = %v, want it to point at install", err)
+	}
+}
+
+func TestCompleteAppNames(t *testing.T) {
+	testRoot(t)
+
+	for _, spec := range []string{"owner/alpha", "owner/beta", "owner/gamma"} {
+		if _, err := run(t, "add", spec); err != nil {
+			t.Fatalf("add %s error: %v", spec, err)
+		}
+	}
+
+	tests := []struct {
+		name       string
+		args       []string
+		toComplete string
+		want       []string
+	}{
+		{"all apps", nil, "", []string{"alpha", "beta", "gamma"}},
+		{"filtered by prefix", nil, "b", []string{"beta"}},
+		{"excludes what is already named", []string{"beta"}, "", []string{"alpha", "gamma"}},
+		{"no match", nil, "z", nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c, cmd := testCLI()
+			got, directive := c.completeAppNames(cmd, tt.args, tt.toComplete)
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("completeAppNames() = %v, want %v", got, tt.want)
+			}
+			if directive != cobra.ShellCompDirectiveNoFileComp {
+				t.Errorf("directive = %v, want NoFileComp", directive)
+			}
+		})
+	}
+}
+
+// Completion runs in a subprocess that is handed the whole command line, so
+// --config-dir has to be honored there too. Cobra's __complete disables flag
+// parsing, which means PersistentPreRunE fires before the flag has a value —
+// the completion function has to publish it itself.
+func TestCompletionHonorsConfigDir(t *testing.T) {
+	testRoot(t)
+
+	if _, err := run(t, "add", "owner/default"); err != nil {
+		t.Fatalf("add error: %v", err)
+	}
+
+	custom := t.TempDir()
+	if _, err := run(t, "--config-dir", custom, "add", "owner/custom"); err != nil {
+		t.Fatalf("add error: %v", err)
+	}
+
+	out, err := run(t, "__complete", "--config-dir", custom, "update", "")
+	if err != nil {
+		t.Fatalf("__complete error: %v", err)
+	}
+	if !strings.Contains(out, "custom") {
+		t.Errorf("__complete output = %q, want the app from --config-dir", out)
+	}
+	if strings.Contains(out, "default") {
+		t.Errorf("__complete output = %q, want --config-dir to have been honored", out)
+	}
+}
+
+func TestCompletionCommandExists(t *testing.T) {
+	testRoot(t)
+
+	out, err := run(t, "completion", "bash")
+	if err != nil {
+		t.Fatalf("completion error: %v", err)
+	}
+	if !strings.Contains(out, "guppy") {
+		t.Errorf("completion output = %q, want a shell script", out)
 	}
 }
 
