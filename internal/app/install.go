@@ -30,7 +30,7 @@ func (i *Installer) out() io.Writer {
 }
 
 func (i *Installer) printf(format string, args ...any) {
-	_, _ = fmt.Fprintf(i.out(), format, args...)
+	fmt.Fprintf(i.out(), format, args...)
 }
 
 func (i *Installer) debugf(format string, args ...any) {

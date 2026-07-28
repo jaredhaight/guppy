@@ -13,6 +13,18 @@ linters:
     - misspell
 
   settings:
+    errcheck:
+      # Writing to the terminal is the canonical errcheck false positive: the
+      # only realistic failure is a closed pipe, and there is nowhere left to
+      # report it. errcheck already ignores fmt.Printf for this reason; guppy
+      # just writes through cmd.OutOrStdout() instead so its output is
+      # testable. Files are written with os.WriteFile and io.Copy, which stay
+      # checked.
+      exclude-functions:
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+
     gosec:
       excludes:
         # Guppy's job is installing executables into a directory on PATH, so
