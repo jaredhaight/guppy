@@ -1,10 +1,6 @@
 package repository
 
 import (
-	"crypto/md5"
-	"crypto/sha1"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -190,19 +186,9 @@ func (h *HTTPRepository) Download(release *Release, dest string) error {
 		return fmt.Errorf("error writing to destination: %w", err)
 	}
 
-	// Verify checksum if available
-	if release.Checksum != "" {
-		h.debugLog("Verifying checksum: %s", release.Checksum)
-		if err := h.verifyChecksum(dest, release.Checksum); err != nil {
-			// Remove the downloaded file if checksum verification fails
-			_ = os.Remove(dest)
-			return fmt.Errorf("checksum verification failed: %w", err)
-		}
-		h.debugLog("Checksum verification passed")
-	} else {
-		h.debugLog("WARNING: No checksum available for verification")
-	}
-
+	// Checksum verification is the caller's job — Release.Checksum carries the
+	// "algorithm:hexvalue" form that checksum.Verify consumes, and doing it
+	// here as well meant the two providers verified differently.
 	return nil
 }
 
@@ -242,61 +228,4 @@ func (h *HTTPRepository) selectChecksum(httpRel *httpRelease) (string, string) {
 		return "md5:" + httpRel.MD5, "MD5"
 	}
 	return "", ""
-}
-
-// verifyChecksum verifies the downloaded file against the checksum
-// Checksum format: "algorithm:hexvalue" (e.g., "sha256:abc123...")
-func (h *HTTPRepository) verifyChecksum(filePath, checksum string) error {
-	// Open the file
-	file, err := os.Open(filePath)
-	if err != nil {
-		return fmt.Errorf("error opening file: %w", err)
-	}
-	defer func() { _ = file.Close() }()
-
-	// Parse the checksum format
-	var algorithm, expectedHash string
-	for i, c := range checksum {
-		if c == ':' {
-			algorithm = checksum[:i]
-			expectedHash = checksum[i+1:]
-			break
-		}
-	}
-
-	if algorithm == "" || expectedHash == "" {
-		return fmt.Errorf("invalid checksum format: %s", checksum)
-	}
-
-	// Calculate the hash based on the algorithm
-	var actualHash string
-	switch algorithm {
-	case "sha256":
-		hasher := sha256.New()
-		if _, err := io.Copy(hasher, file); err != nil {
-			return fmt.Errorf("error calculating SHA256: %w", err)
-		}
-		actualHash = hex.EncodeToString(hasher.Sum(nil))
-	case "sha1":
-		hasher := sha1.New()
-		if _, err := io.Copy(hasher, file); err != nil {
-			return fmt.Errorf("error calculating SHA1: %w", err)
-		}
-		actualHash = hex.EncodeToString(hasher.Sum(nil))
-	case "md5":
-		hasher := md5.New()
-		if _, err := io.Copy(hasher, file); err != nil {
-			return fmt.Errorf("error calculating MD5: %w", err)
-		}
-		actualHash = hex.EncodeToString(hasher.Sum(nil))
-	default:
-		return fmt.Errorf("unsupported hash algorithm: %s", algorithm)
-	}
-
-	// Compare the hashes
-	if actualHash != expectedHash {
-		return fmt.Errorf("%s mismatch: expected %s, got %s", algorithm, expectedHash, actualHash)
-	}
-
-	return nil
 }

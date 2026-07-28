@@ -4,460 +4,454 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/jaredhaight/guppy/internal/config"
-	"github.com/jaredhaight/guppy/pkg/repository"
 )
 
-// Mock repository for testing
-type mockRepository struct {
-	latestRelease      *repository.Release
-	getLatestReleaseErr error
-	compareVersionsResult bool
-	compareVersionsErr error
-	downloadErr        error
-	downloadCalled     bool
+// testRoot points config and data at a temp dir so tests never touch the real
+// home directory.
+func testRoot(t *testing.T) {
+	t.Helper()
+	root := t.TempDir()
+	t.Setenv(config.EnvConfigDir, filepath.Join(root, "config"))
+	t.Setenv(config.EnvDataDir, filepath.Join(root, "data"))
 }
 
-func (m *mockRepository) GetLatestRelease() (*repository.Release, error) {
-	return m.latestRelease, m.getLatestReleaseErr
-}
+// run executes guppy with the given arguments, returning everything written to
+// stdout. Output goes through fmt.Printf rather than cobra's writer, so stdout
+// is swapped for a pipe.
+func run(t *testing.T, args ...string) (string, error) {
+	t.Helper()
 
-func (m *mockRepository) GetRelease(version string) (*repository.Release, error) {
-	return m.latestRelease, m.getLatestReleaseErr
-}
+	// Cobra keeps flag values in package-level vars between runs.
+	resetFlags()
 
-func (m *mockRepository) CompareVersions(current, latest string) (bool, error) {
-	return m.compareVersionsResult, m.compareVersionsErr
-}
-
-func (m *mockRepository) Download(release *repository.Release, destination string) error {
-	m.downloadCalled = true
-	if m.downloadErr != nil {
-		return m.downloadErr
-	}
-	// Create a dummy file for testing
-	return os.WriteFile(destination, []byte("mock download content"), 0644)
-}
-
-func (m *mockRepository) SetDebug(enabled bool) {}
-
-func TestLoadConfig(t *testing.T) {
-	tempDir := t.TempDir()
-
-	// Create a test config file
-	configPath := filepath.Join(tempDir, "test-config.json")
-	configContent := `{
-  "repository": {
-    "type": "github",
-    "owner": "testowner",
-    "repo": "testrepo"
-  },
-  "target_path": "/usr/local/bin/app",
-  "applier": "binary"
-}`
-
-	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
-		t.Fatalf("Failed to create config file: %v", err)
-	}
-
-	// Set the config file path
-	cfgFile = configPath
-
-	err := loadConfig()
+	old := os.Stdout
+	r, w, err := os.Pipe()
 	if err != nil {
-		t.Fatalf("loadConfig() failed: %v", err)
+		t.Fatalf("failed to create pipe: %v", err)
+	}
+	os.Stdout = w
+
+	rootCmd.SetArgs(args)
+	runErr := rootCmd.Execute()
+
+	_ = w.Close()
+	os.Stdout = old
+
+	var buf bytes.Buffer
+	if _, err := buf.ReadFrom(r); err != nil {
+		t.Fatalf("failed to read captured output: %v", err)
+	}
+	return buf.String(), runErr
+}
+
+func resetFlags() {
+	configDir, debug, intervalFlag = "", false, ""
+	addName, addApplier, addAsset, addToken, addURL = "", "binary", "", "", ""
+	addBin, addPreInstall, addPostInstall = nil, nil, nil
+	removeYes = false
+}
+
+func TestAddGitHub(t *testing.T) {
+	testRoot(t)
+
+	out, err := run(t, "add", "BurntSushi/ripgrep", "--applier", "archive", "--bin", "rg")
+	if err != nil {
+		t.Fatalf("add error: %v (%s)", err, out)
 	}
 
-	if cfg == nil {
-		t.Fatal("loadConfig() did not set global cfg variable")
+	// The app name defaults to the repo name.
+	a, err := config.LoadApp("ripgrep")
+	if err != nil {
+		t.Fatalf("LoadApp() error: %v", err)
 	}
-
-	if cfg.Repository.Type != "github" {
-		t.Errorf("cfg.Repository.Type = %s, want github", cfg.Repository.Type)
+	if a.Repository.Type != "github" || a.Repository.Owner != "BurntSushi" || a.Repository.Repo != "ripgrep" {
+		t.Errorf("repository = %+v", a.Repository)
 	}
-	if cfg.Repository.Owner != "testowner" {
-		t.Errorf("cfg.Repository.Owner = %s, want testowner", cfg.Repository.Owner)
+	if a.Applier != "archive" {
+		t.Errorf("Applier = %q, want archive", a.Applier)
 	}
-	if cfg.Repository.Repo != "testrepo" {
-		t.Errorf("cfg.Repository.Repo = %s, want testrepo", cfg.Repository.Repo)
+	if len(a.Bin) != 1 || a.Bin[0] != "rg" {
+		t.Errorf("Bin = %v, want [rg]", a.Bin)
+	}
+	if filepath.Ext(a.Path()) != ".yaml" {
+		t.Errorf("add wrote %q, want a .yaml file", a.Path())
 	}
 }
 
-func TestLoadConfig_FileNotFound(t *testing.T) {
-	tempDir := t.TempDir()
-	cfgFile = filepath.Join(tempDir, "nonexistent.json")
+func TestAddWithHooks(t *testing.T) {
+	testRoot(t)
 
-	err := loadConfig()
+	if _, err := run(t, "add", "owner/repo",
+		"--pre-install", "systemctl stop x",
+		"--post-install", "echo one",
+		"--post-install", "echo two"); err != nil {
+		t.Fatalf("add error: %v", err)
+	}
+
+	a, err := config.LoadApp("repo")
+	if err != nil {
+		t.Fatalf("LoadApp() error: %v", err)
+	}
+	if len(a.PreInstall) != 1 || a.PreInstall[0] != "systemctl stop x" {
+		t.Errorf("PreInstall = %v", a.PreInstall)
+	}
+	if len(a.PostInstall) != 2 || a.PostInstall[1] != "echo two" {
+		t.Errorf("PostInstall = %v, want both commands in order", a.PostInstall)
+	}
+}
+
+func TestAddHTTP(t *testing.T) {
+	testRoot(t)
+
+	if _, err := run(t, "add", "--url", "https://example.com/releases.json", "--name", "myapp"); err != nil {
+		t.Fatalf("add error: %v", err)
+	}
+
+	a, err := config.LoadApp("myapp")
+	if err != nil {
+		t.Fatalf("LoadApp() error: %v", err)
+	}
+	if a.Repository.Type != "http" || a.Repository.URL != "https://example.com/releases.json" {
+		t.Errorf("repository = %+v", a.Repository)
+	}
+}
+
+func TestAddErrors(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{
+			name: "http without a name",
+			args: []string{"add", "--url", "https://example.com/r.json"},
+			want: "--name is required",
+		},
+		{
+			name: "no arguments",
+			args: []string{"add"},
+			want: "expected owner/repo",
+		},
+		{
+			name: "malformed repo spec",
+			args: []string{"add", "justarepo"},
+			want: "expected owner/repo",
+		},
+		{
+			name: "empty owner",
+			args: []string{"add", "/repo"},
+			want: "expected owner/repo",
+		},
+		{
+			name: "both repo and url",
+			args: []string{"add", "owner/repo", "--url", "https://example.com/r.json"},
+			want: "not both",
+		},
+		{
+			name: "name shadowing a subcommand",
+			args: []string{"add", "owner/list"},
+			want: "is a guppy command",
+		},
+		{
+			name: "name escaping the apps directory",
+			args: []string{"add", "--url", "https://example.com/r.json", "--name", "../evil"},
+			want: "invalid app name",
+		},
+		{
+			name: "unknown applier",
+			args: []string{"add", "owner/repo", "--applier", "magic"},
+			want: "invalid applier",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			testRoot(t)
+
+			_, err := run(t, tt.args...)
+			if err == nil {
+				t.Fatalf("%v succeeded, want an error", tt.args)
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("error = %v, want it to mention %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestAddDuplicate(t *testing.T) {
+	testRoot(t)
+
+	if _, err := run(t, "add", "owner/repo"); err != nil {
+		t.Fatalf("first add error: %v", err)
+	}
+	_, err := run(t, "add", "owner/repo")
 	if err == nil {
-		t.Error("loadConfig() expected error for nonexistent file, got nil")
+		t.Fatal("second add succeeded, want an already-exists error")
+	}
+	if !strings.Contains(err.Error(), "already exists") {
+		t.Errorf("error = %v, want an already-exists error", err)
 	}
 }
 
-func TestCreateRepository_GitHub(t *testing.T) {
-	cfg = &config.Config{
-		Repository: config.RepositoryConfig{
-			Type:      "github",
-			Owner:     "testowner",
-			Repo:      "testrepo",
-			Token:     "ghp_token123",
-			AssetName: "app-linux",
-		},
-	}
+func TestListEmpty(t *testing.T) {
+	testRoot(t)
 
-	repo, err := createRepository()
+	out, err := run(t, "list")
 	if err != nil {
-		t.Fatalf("createRepository() failed: %v", err)
+		t.Fatalf("list error: %v", err)
 	}
-
-	if repo == nil {
-		t.Fatal("createRepository() returned nil repository")
-	}
-
-	// Verify it's a GitHub repository by checking the type
-	if _, ok := repo.(*repository.GitHubRepository); !ok {
-		t.Errorf("createRepository() did not return GitHubRepository")
+	if !strings.Contains(out, "No apps configured") {
+		t.Errorf("list output = %q, want a hint for empty configuration", out)
 	}
 }
 
-func TestCreateRepository_HTTP(t *testing.T) {
-	cfg = &config.Config{
-		Repository: config.RepositoryConfig{
-			Type: "http",
-			URL:  "https://example.com/releases.json",
-		},
+func TestList(t *testing.T) {
+	testRoot(t)
+
+	if _, err := run(t, "add", "BurntSushi/ripgrep"); err != nil {
+		t.Fatalf("add error: %v", err)
+	}
+	if _, err := run(t, "add", "--url", "https://example.com/r.json", "--name", "myapp"); err != nil {
+		t.Fatalf("add error: %v", err)
 	}
 
-	repo, err := createRepository()
+	out, err := run(t, "list")
 	if err != nil {
-		t.Fatalf("createRepository() failed: %v", err)
+		t.Fatalf("list error: %v", err)
 	}
 
-	if repo == nil {
-		t.Fatal("createRepository() returned nil repository")
-	}
-
-	// Verify it's an HTTP repository by checking the type
-	if _, ok := repo.(*repository.HTTPRepository); !ok {
-		t.Errorf("createRepository() did not return HTTPRepository")
+	for _, want := range []string{"ripgrep", "BurntSushi/ripgrep", "myapp", "https://example.com/r.json"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("list output missing %q:\n%s", want, out)
+		}
 	}
 }
 
-func TestCreateRepository_UnsupportedType(t *testing.T) {
-	cfg = &config.Config{
-		Repository: config.RepositoryConfig{
-			Type: "unsupported",
-		},
+func TestBinCmd(t *testing.T) {
+	testRoot(t)
+
+	out, err := run(t, "bin")
+	if err != nil {
+		t.Fatalf("bin error: %v", err)
 	}
 
-	_, err := createRepository()
+	want, err := config.BinDir()
+	if err != nil {
+		t.Fatalf("BinDir() error: %v", err)
+	}
+	if strings.TrimSpace(out) != want {
+		t.Errorf("bin output = %q, want %q", strings.TrimSpace(out), want)
+	}
+}
+
+func TestRemoveCmd(t *testing.T) {
+	testRoot(t)
+
+	if _, err := run(t, "add", "owner/repo"); err != nil {
+		t.Fatalf("add error: %v", err)
+	}
+	if _, err := run(t, "remove", "repo", "--yes"); err != nil {
+		t.Fatalf("remove error: %v", err)
+	}
+	if _, err := config.AppPath("repo"); err == nil {
+		t.Error("remove left the config file behind")
+	}
+}
+
+func TestRemoveMissingApp(t *testing.T) {
+	testRoot(t)
+
+	if _, err := run(t, "remove", "ghost", "--yes"); err == nil {
+		t.Error("remove of a missing app succeeded, want an error")
+	}
+}
+
+func TestConfigDirFlag(t *testing.T) {
+	testRoot(t)
+	custom := t.TempDir()
+
+	if _, err := run(t, "--config-dir", custom, "add", "owner/repo"); err != nil {
+		t.Fatalf("add error: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(custom, "apps", "repo.yaml")); err != nil {
+		t.Errorf("--config-dir was not honored: %v", err)
+	}
+}
+
+func TestResolveAppsDefaultsToAll(t *testing.T) {
+	testRoot(t)
+
+	if _, err := run(t, "add", "owner/alpha"); err != nil {
+		t.Fatalf("add error: %v", err)
+	}
+	if _, err := run(t, "add", "owner/beta"); err != nil {
+		t.Fatalf("add error: %v", err)
+	}
+
+	names, err := resolveApps(nil)
+	if err != nil {
+		t.Fatalf("resolveApps() error: %v", err)
+	}
+	if len(names) != 2 || names[0] != "alpha" || names[1] != "beta" {
+		t.Errorf("resolveApps(nil) = %v, want all apps sorted", names)
+	}
+
+	// Explicit names are passed through untouched.
+	got, err := resolveApps([]string{"beta"})
+	if err != nil {
+		t.Fatalf("resolveApps() error: %v", err)
+	}
+	if len(got) != 1 || got[0] != "beta" {
+		t.Errorf("resolveApps([beta]) = %v", got)
+	}
+}
+
+func TestResolveAppsWithNoneConfigured(t *testing.T) {
+	testRoot(t)
+
+	if _, err := resolveApps(nil); err == nil {
+		t.Error("resolveApps() with no apps succeeded, want a helpful error")
+	}
+}
+
+// One broken app must not stop the others from being processed.
+func TestForEachAppContinuesPastFailures(t *testing.T) {
+	testRoot(t)
+
+	for _, spec := range []string{"owner/alpha", "owner/beta", "owner/gamma"} {
+		if _, err := run(t, "add", spec); err != nil {
+			t.Fatalf("add %s error: %v", spec, err)
+		}
+	}
+
+	var seen []string
+	err := forEachApp([]string{"alpha", "beta", "gamma"}, func(a *config.App) error {
+		seen = append(seen, a.Name())
+		if a.Name() == "beta" {
+			return os.ErrInvalid
+		}
+		return nil
+	})
+
 	if err == nil {
-		t.Error("createRepository() expected error for unsupported type, got nil")
+		t.Error("forEachApp() returned nil, want it to report the failure")
+	}
+	if len(seen) != 3 {
+		t.Errorf("visited %v, want all three apps despite the failure", seen)
+	}
+	if !strings.Contains(err.Error(), "1 of 3") {
+		t.Errorf("error = %v, want a count of failures", err)
 	}
 }
 
-func TestPerformUpdate_NoUpdateNeeded(t *testing.T) {
-	tempDir := t.TempDir()
+func TestForEachAppReportsUnloadableApps(t *testing.T) {
+	testRoot(t)
 
-	cfg = &config.Config{
-		CurrentVersion: "v2.0.0",
-		DownloadDir:    tempDir,
-		TargetPath:     filepath.Join(tempDir, "target"),
-		Applier:        "binary",
-	}
-	cfgFile = filepath.Join(tempDir, "config.json")
-
-	mockRepo := &mockRepository{
-		latestRelease: &repository.Release{
-			Version: "v2.0.0",
-		},
-		compareVersionsResult: false, // Not newer
-	}
-
-	err := performUpdate(mockRepo)
+	appsDir, err := config.AppsDir()
 	if err != nil {
-		t.Fatalf("performUpdate() failed: %v", err)
+		t.Fatalf("AppsDir() error: %v", err)
+	}
+	if err := os.MkdirAll(appsDir, 0755); err != nil {
+		t.Fatalf("failed to create apps dir: %v", err)
+	}
+	// Missing the required owner/repo for a github app.
+	if err := os.WriteFile(filepath.Join(appsDir, "broken.yaml"), []byte("repository:\n  type: github\n"), 0644); err != nil {
+		t.Fatalf("failed to write config: %v", err)
 	}
 
-	if mockRepo.downloadCalled {
-		t.Error("performUpdate() should not download when already up to date")
-	}
-}
-
-func TestPerformUpdate_NewVersionDownloadAndApply(t *testing.T) {
-	tempDir := t.TempDir()
-
-	// Create target file
-	targetPath := filepath.Join(tempDir, "target")
-	if err := os.WriteFile(targetPath, []byte("old version"), 0644); err != nil {
-		t.Fatalf("Failed to create target file: %v", err)
-	}
-
-	configPath := filepath.Join(tempDir, "config.json")
-	cfg = &config.Config{
-		CurrentVersion: "v1.0.0",
-		DownloadDir:    filepath.Join(tempDir, "downloads"),
-		TargetPath:     targetPath,
-		Applier:        "binary",
-		Repository: config.RepositoryConfig{
-			Type:  "github",
-			Owner: "test",
-			Repo:  "test",
-		},
-	}
-	cfgFile = configPath
-
-	// Save initial config
-	if err := cfg.Save(configPath); err != nil {
-		t.Fatalf("Failed to save config: %v", err)
-	}
-
-	mockRepo := &mockRepository{
-		latestRelease: &repository.Release{
-			Version:  "v2.0.0",
-			FileName: "app-v2.0.0.bin",
-		},
-		compareVersionsResult: true, // Is newer
-	}
-
-	err := performUpdate(mockRepo)
-	if err != nil {
-		t.Fatalf("performUpdate() failed: %v", err)
-	}
-
-	if !mockRepo.downloadCalled {
-		t.Error("performUpdate() should have called Download()")
-	}
-
-	// Verify config was updated with new version
-	updatedCfg, err := config.Load(configPath)
-	if err != nil {
-		t.Fatalf("Failed to load updated config: %v", err)
-	}
-
-	if updatedCfg.CurrentVersion != "v2.0.0" {
-		t.Errorf("Config current_version = %s, want v2.0.0", updatedCfg.CurrentVersion)
-	}
-}
-
-func TestPerformUpdate_DownloadError(t *testing.T) {
-	tempDir := t.TempDir()
-
-	cfg = &config.Config{
-		CurrentVersion: "v1.0.0",
-		DownloadDir:    tempDir,
-		TargetPath:     filepath.Join(tempDir, "target"),
-		Applier:        "binary",
-	}
-	cfgFile = filepath.Join(tempDir, "config.json")
-
-	mockRepo := &mockRepository{
-		latestRelease: &repository.Release{
-			Version:  "v2.0.0",
-			FileName: "app.bin",
-		},
-		compareVersionsResult: true,
-		downloadErr:           os.ErrPermission,
-	}
-
-	err := performUpdate(mockRepo)
+	called := false
+	err = forEachApp([]string{"broken"}, func(a *config.App) error {
+		called = true
+		return nil
+	})
 	if err == nil {
-		t.Error("performUpdate() expected error when download fails, got nil")
+		t.Error("forEachApp() with an invalid config returned nil, want an error")
+	}
+	if called {
+		t.Error("forEachApp() invoked the callback for an app that failed to load")
 	}
 }
 
-func TestPerformUpdate_UnknownApplierType(t *testing.T) {
-	tempDir := t.TempDir()
-
-	// Create download directory and file
-	downloadDir := filepath.Join(tempDir, "downloads")
-	if err := os.MkdirAll(downloadDir, 0755); err != nil {
-		t.Fatalf("Failed to create download dir: %v", err)
+func TestReserved(t *testing.T) {
+	tests := []struct {
+		name string
+		want bool
+	}{
+		{"list", true},
+		{"add", true},
+		{"remove", true},
+		{"rm", true}, // alias
+		{"check", true},
+		{"bin", true},
+		{"version", true},
+		{"ripgrep", false},
+		{"myapp", false},
 	}
 
-	cfg = &config.Config{
-		CurrentVersion: "v1.0.0",
-		DownloadDir:    downloadDir,
-		TargetPath:     filepath.Join(tempDir, "target"),
-		Applier:        "unknown_applier",
-	}
-	cfgFile = filepath.Join(tempDir, "config.json")
-
-	mockRepo := &mockRepository{
-		latestRelease: &repository.Release{
-			Version:  "v2.0.0",
-			FileName: "app.bin",
-		},
-		compareVersionsResult: true,
-	}
-
-	err := performUpdate(mockRepo)
-	if err == nil {
-		t.Error("performUpdate() expected error for unknown applier type, got nil")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := reserved(tt.name); got != tt.want {
+				t.Errorf("reserved(%q) = %v, want %v", tt.name, got, tt.want)
+			}
+		})
 	}
 }
 
-func TestPerformUpdate_NoCurrentVersion(t *testing.T) {
-	tempDir := t.TempDir()
+func TestOnPath(t *testing.T) {
+	dir := t.TempDir()
+	other := t.TempDir()
 
-	targetPath := filepath.Join(tempDir, "target")
-	configPath := filepath.Join(tempDir, "config.json")
+	t.Setenv("PATH", strings.Join([]string{"/usr/bin", dir, "/bin"}, string(os.PathListSeparator)))
 
-	cfg = &config.Config{
-		CurrentVersion: "", // No current version
-		DownloadDir:    filepath.Join(tempDir, "downloads"),
-		TargetPath:     targetPath,
-		Applier:        "binary",
-		Repository: config.RepositoryConfig{
-			Type:  "github",
-			Owner: "test",
-			Repo:  "test",
-		},
+	if !onPath(dir) {
+		t.Errorf("onPath(%q) = false, want true", dir)
 	}
-	cfgFile = configPath
-
-	// Save config
-	if err := cfg.Save(configPath); err != nil {
-		t.Fatalf("Failed to save config: %v", err)
-	}
-
-	mockRepo := &mockRepository{
-		latestRelease: &repository.Release{
-			Version:  "v1.0.0",
-			FileName: "app.bin",
-		},
-	}
-
-	err := performUpdate(mockRepo)
-	if err != nil {
-		t.Fatalf("performUpdate() failed when no current version: %v", err)
-	}
-
-	// Should proceed with download when no current version is set
-	if !mockRepo.downloadCalled {
-		t.Error("performUpdate() should download when no current version is set")
+	if onPath(other) {
+		t.Errorf("onPath(%q) = true, want false", other)
 	}
 }
 
 func TestDebugLog(t *testing.T) {
-	// Save original stderr
 	oldStderr := os.Stderr
 	r, w, _ := os.Pipe()
 	os.Stderr = w
 
-	// Test with debug enabled
 	debug = true
 	debugLog("test message: %s", "hello")
-
-	// Test with debug disabled
 	debug = false
 	debugLog("should not appear")
 
-	// Restore stderr
 	_ = w.Close()
 	os.Stderr = oldStderr
 
-	// Read captured output
 	var buf bytes.Buffer
 	_, _ = buf.ReadFrom(r)
 	output := buf.String()
 
-	if !bytes.Contains([]byte(output), []byte("[DEBUG] test message: hello")) {
-		t.Error("debugLog() should output message when debug is enabled")
+	if !strings.Contains(output, "[DEBUG] test message: hello") {
+		t.Error("debugLog() should output a message when debug is enabled")
 	}
-	if bytes.Contains([]byte(output), []byte("should not appear")) {
-		t.Error("debugLog() should not output message when debug is disabled")
+	if strings.Contains(output, "should not appear") {
+		t.Error("debugLog() should stay silent when debug is disabled")
 	}
-
-	// Reset debug flag
-	debug = false
 }
 
 func TestVersionCmd(t *testing.T) {
-	// Save original stdout
-	oldStdout := os.Stdout
-	r, w, _ := os.Pipe()
-	os.Stdout = w
-
-	// Set a test version
 	oldVersion := Version
 	Version = "v1.2.3-test"
+	defer func() { Version = oldVersion }()
 
-	// Execute version command
-	versionCmd.Run(versionCmd, []string{})
-
-	// Restore stdout and version
-	_ = w.Close()
-	os.Stdout = oldStdout
-	Version = oldVersion
-
-	// Read captured output
-	var buf bytes.Buffer
-	_, _ = buf.ReadFrom(r)
-	output := buf.String()
-
-	if !bytes.Contains([]byte(output), []byte("v1.2.3-test")) {
-		t.Error("Version command should output the version number")
-	}
-	if !bytes.Contains([]byte(output), []byte("Guppy Software Updater")) {
-		t.Error("Version command should output the program name")
-	}
-}
-
-func TestCreateRepository_WithAssetName(t *testing.T) {
-	cfg = &config.Config{
-		Repository: config.RepositoryConfig{
-			Type:      "github",
-			Owner:     "testowner",
-			Repo:      "testrepo",
-			AssetName: "specific-asset",
-		},
-	}
-
-	repo, err := createRepository()
+	out, err := run(t, "version")
 	if err != nil {
-		t.Fatalf("createRepository() failed: %v", err)
+		t.Fatalf("version error: %v", err)
 	}
-
-	if repo == nil {
-		t.Fatal("createRepository() returned nil repository")
+	if !strings.Contains(out, "v1.2.3-test") {
+		t.Errorf("version output = %q, want the version string", out)
 	}
-
-	// The asset name should be set on the repository
-	githubRepo, ok := repo.(*repository.GitHubRepository)
-	if !ok {
-		t.Fatal("Expected GitHubRepository")
-	}
-
-	// We can't easily verify the asset name was set without exposing it,
-	// but we can verify the repository was created successfully
-	if githubRepo == nil {
-		t.Error("GitHub repository should not be nil")
-	}
-}
-
-func TestCreateRepository_WithDebug(t *testing.T) {
-	debug = true
-	defer func() { debug = false }()
-
-	cfg = &config.Config{
-		Repository: config.RepositoryConfig{
-			Type:  "github",
-			Owner: "testowner",
-			Repo:  "testrepo",
-		},
-	}
-
-	repo, err := createRepository()
-	if err != nil {
-		t.Fatalf("createRepository() failed: %v", err)
-	}
-
-	if repo == nil {
-		t.Fatal("createRepository() returned nil repository")
-	}
-
-	// Debug should be set on the repository (we can't easily verify this without
-	// exposing the debug flag, but we can verify creation succeeded)
 }

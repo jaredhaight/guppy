@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -50,17 +51,20 @@ func (g *GitHubRepository) debugLog(format string, args ...interface{}) {
 	}
 }
 
+// githubAsset represents a single downloadable file attached to a release
+type githubAsset struct {
+	ID                 int64  `json:"id"`
+	Name               string `json:"name"`
+	BrowserDownloadURL string `json:"browser_download_url"`
+	Digest             string `json:"digest"` // SHA256 checksum in format "sha256:hexvalue"
+}
+
 // githubRelease represents a GitHub release API response
 type githubRelease struct {
-	TagName     string    `json:"tag_name"`
-	Name        string    `json:"name"`
-	PublishedAt time.Time `json:"published_at"`
-	Assets      []struct {
-		ID                 int64  `json:"id"`
-		Name               string `json:"name"`
-		BrowserDownloadURL string `json:"browser_download_url"`
-		Digest             string `json:"digest"` // SHA256 checksum in format "sha256:hexvalue"
-	} `json:"assets"`
+	TagName     string        `json:"tag_name"`
+	Name        string        `json:"name"`
+	PublishedAt time.Time     `json:"published_at"`
+	Assets      []githubAsset `json:"assets"`
 }
 
 // GetLatestRelease returns the latest release from GitHub
@@ -222,20 +226,17 @@ func (g *GitHubRepository) convertGitHubRelease(ghRelease *githubRelease) (*Rele
 	var assetID int64
 	if g.AssetName != "" {
 		g.debugLog("Looking for specific asset: %s", g.AssetName)
-		// Look for specific asset
-		for _, asset := range ghRelease.Assets {
-			if asset.Name == g.AssetName {
-				downloadURL = asset.BrowserDownloadURL
-				fileName = asset.Name
-				assetID = asset.ID
-				checksum = parseDigest(asset.Digest)
-				g.debugLog("Found matching asset: %s (ID: %d, Checksum: %s)", fileName, assetID, checksum)
-				break
-			}
+
+		asset, err := g.selectAsset(ghRelease.Assets)
+		if err != nil {
+			return nil, err
 		}
-		if downloadURL == "" {
-			return nil, fmt.Errorf("asset %s not found in release", g.AssetName)
-		}
+
+		downloadURL = asset.BrowserDownloadURL
+		fileName = asset.Name
+		assetID = asset.ID
+		checksum = parseDigest(asset.Digest)
+		g.debugLog("Found matching asset: %s (ID: %d, Checksum: %s)", fileName, assetID, checksum)
 	} else {
 		// Use the first asset
 		downloadURL = ghRelease.Assets[0].BrowserDownloadURL
@@ -265,17 +266,63 @@ func (g *GitHubRepository) convertGitHubRelease(ghRelease *githubRelease) (*Rele
 	}, nil
 }
 
-// parseDigest extracts the hex value from a digest string in format "sha256:hexvalue"
-// Returns empty string if the digest is empty or invalid
+// selectAsset picks the release asset matching AssetName.
+//
+// An exact filename match wins. Failing that, AssetName is treated as a
+// regular expression, because asset names carry the version
+// (ripgrep-15.2.0-aarch64-apple-darwin.tar.gz) and a literal name would stop
+// matching the moment a new release is published.
+func (g *GitHubRepository) selectAsset(assets []githubAsset) (githubAsset, error) {
+	for _, asset := range assets {
+		if asset.Name == g.AssetName {
+			return asset, nil
+		}
+	}
+
+	pattern, err := regexp.Compile(g.AssetName)
+	if err != nil {
+		return githubAsset{}, fmt.Errorf("asset %q not found in release, and it is not a valid pattern: %w", g.AssetName, err)
+	}
+
+	var matches []githubAsset
+	for _, asset := range assets {
+		if pattern.MatchString(asset.Name) {
+			matches = append(matches, asset)
+		}
+	}
+
+	switch len(matches) {
+	case 0:
+		return githubAsset{}, fmt.Errorf("asset %q not found in release (available: %s)",
+			g.AssetName, strings.Join(assetNames(assets), ", "))
+	case 1:
+		return matches[0], nil
+	default:
+		return githubAsset{}, fmt.Errorf("asset pattern %q matches %d assets: %s",
+			g.AssetName, len(matches), strings.Join(assetNames(matches), ", "))
+	}
+}
+
+func assetNames(assets []githubAsset) []string {
+	names := make([]string, len(assets))
+	for i, asset := range assets {
+		names[i] = asset.Name
+	}
+	return names
+}
+
+// parseDigest normalizes a GitHub asset digest into the "algorithm:hexvalue"
+// form Release.Checksum uses. Returns empty string if the digest is empty or
+// in a format we don't recognize.
 func parseDigest(digest string) string {
 	if digest == "" {
 		return ""
 	}
 
 	// GitHub API returns digest in format "sha256:hexvalue"
-	parts := strings.SplitN(digest, ":", 2)
-	if len(parts) == 2 && parts[0] == "sha256" {
-		return parts[1]
+	algorithm, value, found := strings.Cut(digest, ":")
+	if found && algorithm == "sha256" && value != "" {
+		return digest
 	}
 
 	return ""

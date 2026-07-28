@@ -3,625 +3,417 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
-func TestLoad_GitHubConfig(t *testing.T) {
-	tempDir := t.TempDir()
+// testRoot points the config and data directories at a temp dir so tests never
+// touch the real home directory.
+func testRoot(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	t.Setenv(EnvConfigDir, filepath.Join(root, "config"))
+	t.Setenv(EnvDataDir, filepath.Join(root, "data"))
+	return root
+}
 
-	// Create a valid GitHub config
-	configPath := filepath.Join(tempDir, "guppy.json")
-	configContent := `{
+// writeApp drops a config file into the apps directory.
+func writeApp(t *testing.T, filename, body string) string {
+	t.Helper()
+	dir, err := AppsDir()
+	if err != nil {
+		t.Fatalf("AppsDir() error: %v", err)
+	}
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatalf("failed to create apps dir: %v", err)
+	}
+	path := filepath.Join(dir, filename)
+	if err := os.WriteFile(path, []byte(body), 0644); err != nil {
+		t.Fatalf("failed to write %s: %v", filename, err)
+	}
+	return path
+}
+
+const githubYAML = `repository:
+  type: github
+  owner: BurntSushi
+  repo: ripgrep
+  asset_name: ripgrep-.*-apple-darwin.tar.gz
+current_version: 14.1.1
+applier: archive
+bin:
+  - rg
+pre_install:
+  - echo before
+post_install:
+  - echo after
+`
+
+const githubJSON = `{
   "repository": {
     "type": "github",
-    "owner": "testowner",
-    "repo": "testrepo",
-    "token": "ghp_testtoken123",
-    "asset_name": "app-linux-amd64"
+    "owner": "BurntSushi",
+    "repo": "ripgrep",
+    "asset_name": "ripgrep-.*-apple-darwin.tar.gz"
   },
-  "current_version": "v1.0.0",
-  "target_path": "/usr/local/bin/app",
-  "applier": "binary",
-  "download_dir": "/tmp/downloads"
+  "current_version": "14.1.1",
+  "applier": "archive",
+  "bin": ["rg"],
+  "pre_install": ["echo before"],
+  "post_install": ["echo after"]
 }`
 
-	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
-		t.Fatalf("Failed to create config file: %v", err)
-	}
+// YAML, YML and JSON must all produce the same config.
+func TestLoadAppFormatsAgree(t *testing.T) {
+	testRoot(t)
 
-	config, err := Load(configPath)
+	writeApp(t, "yamlapp.yaml", githubYAML)
+	writeApp(t, "ymlapp.yml", githubYAML)
+	writeApp(t, "jsonapp.json", githubJSON)
+
+	for _, name := range []string{"yamlapp", "ymlapp", "jsonapp"} {
+		t.Run(name, func(t *testing.T) {
+			a, err := LoadApp(name)
+			if err != nil {
+				t.Fatalf("LoadApp(%q) error: %v", name, err)
+			}
+
+			if a.Name() != name {
+				t.Errorf("Name() = %q, want %q", a.Name(), name)
+			}
+			if a.Repository.Type != "github" || a.Repository.Owner != "BurntSushi" || a.Repository.Repo != "ripgrep" {
+				t.Errorf("repository = %+v", a.Repository)
+			}
+			if a.Repository.AssetName != "ripgrep-.*-apple-darwin.tar.gz" {
+				t.Errorf("AssetName = %q", a.Repository.AssetName)
+			}
+			if a.CurrentVersion != "14.1.1" {
+				t.Errorf("CurrentVersion = %q, want 14.1.1", a.CurrentVersion)
+			}
+			if a.Applier != "archive" {
+				t.Errorf("Applier = %q, want archive", a.Applier)
+			}
+			if len(a.Bin) != 1 || a.Bin[0] != "rg" {
+				t.Errorf("Bin = %v, want [rg]", a.Bin)
+			}
+			if len(a.PreInstall) != 1 || a.PreInstall[0] != "echo before" {
+				t.Errorf("PreInstall = %v", a.PreInstall)
+			}
+			if len(a.PostInstall) != 1 || a.PostInstall[0] != "echo after" {
+				t.Errorf("PostInstall = %v", a.PostInstall)
+			}
+		})
+	}
+}
+
+func TestLoadAppDefaults(t *testing.T) {
+	testRoot(t)
+	writeApp(t, "minimal.yaml", "repository:\n  owner: o\n  repo: r\n")
+
+	a, err := LoadApp("minimal")
 	if err != nil {
-		t.Fatalf("Load() failed: %v", err)
+		t.Fatalf("LoadApp() error: %v", err)
 	}
 
-	if config.Repository.Type != "github" {
-		t.Errorf("Repository.Type = %s, want github", config.Repository.Type)
+	if a.Repository.Type != "github" {
+		t.Errorf("default repository.type = %q, want github", a.Repository.Type)
 	}
-	if config.Repository.Owner != "testowner" {
-		t.Errorf("Repository.Owner = %s, want testowner", config.Repository.Owner)
+	if a.Applier != "binary" {
+		t.Errorf("default applier = %q, want binary", a.Applier)
 	}
-	if config.Repository.Repo != "testrepo" {
-		t.Errorf("Repository.Repo = %s, want testrepo", config.Repository.Repo)
-	}
-	if config.Repository.Token != "ghp_testtoken123" {
-		t.Errorf("Repository.Token = %s, want ghp_testtoken123", config.Repository.Token)
-	}
-	if config.Repository.AssetName != "app-linux-amd64" {
-		t.Errorf("Repository.AssetName = %s, want app-linux-amd64", config.Repository.AssetName)
-	}
-	if config.CurrentVersion != "v1.0.0" {
-		t.Errorf("CurrentVersion = %s, want v1.0.0", config.CurrentVersion)
-	}
-	if config.TargetPath != "/usr/local/bin/app" {
-		t.Errorf("TargetPath = %s, want /usr/local/bin/app", config.TargetPath)
-	}
-	if config.Applier != "binary" {
-		t.Errorf("Applier = %s, want binary", config.Applier)
-	}
-	if config.DownloadDir != "/tmp/downloads" {
-		t.Errorf("DownloadDir = %s, want /tmp/downloads", config.DownloadDir)
+	// Bin defaults to the app's own name.
+	if got := a.Binaries(); len(got) != 1 || got[0] != "minimal" {
+		t.Errorf("Binaries() = %v, want [minimal]", got)
 	}
 }
 
-func TestLoad_HTTPConfig(t *testing.T) {
-	tempDir := t.TempDir()
+func TestLoadAppRejectsUnknownKeys(t *testing.T) {
+	testRoot(t)
 
-	configPath := filepath.Join(tempDir, "guppy.json")
-	configContent := `{
-  "repository": {
-    "type": "http",
-    "url": "https://example.com/releases"
-  },
-  "current_version": "v2.0.0",
-  "target_path": "/opt/myapp/bin/app",
-  "applier": "archive"
-}`
-
-	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
-		t.Fatalf("Failed to create config file: %v", err)
+	tests := []struct {
+		name, file, body string
+	}{
+		{
+			name: "unknown top-level key in yaml",
+			file: "a.yaml",
+			body: "repository:\n  owner: o\n  repo: r\ntarget_path: /old/field\n",
+		},
+		{
+			name: "unknown nested key in yaml",
+			file: "b.yaml",
+			body: "repository:\n  owner: o\n  repo: r\n  bogus: 1\n",
+		},
+		{
+			name: "unknown top-level key in json",
+			file: "c.json",
+			body: `{"repository":{"owner":"o","repo":"r"},"download_dir":"/tmp"}`,
+		},
 	}
 
-	config, err := Load(configPath)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := writeApp(t, tt.file, tt.body)
+			name := tt.file[:len(tt.file)-len(filepath.Ext(tt.file))]
+			if _, err := LoadFile(name, path); err == nil {
+				t.Error("LoadFile() accepted an unknown key, want error")
+			}
+		})
+	}
+}
+
+func TestSaveRoundTripsFormat(t *testing.T) {
+	testRoot(t)
+
+	cases := []struct{ name, file, body string }{
+		{"yaml", "y.yaml", githubYAML},
+		{"json", "j.json", githubJSON},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			path := writeApp(t, tc.file, tc.body)
+
+			a, err := LoadFile(tc.name, path)
+			if err != nil {
+				t.Fatalf("LoadFile() error: %v", err)
+			}
+
+			a.CurrentVersion = "15.0.0"
+			if err := a.Save(); err != nil {
+				t.Fatalf("Save() error: %v", err)
+			}
+
+			// Saved in place, so the extension (and therefore format) is unchanged.
+			if a.Path() != path {
+				t.Errorf("Save() wrote to %q, want %q", a.Path(), path)
+			}
+
+			reloaded, err := LoadFile(tc.name, path)
+			if err != nil {
+				t.Fatalf("reload error: %v", err)
+			}
+			if reloaded.CurrentVersion != "15.0.0" {
+				t.Errorf("CurrentVersion = %q, want 15.0.0", reloaded.CurrentVersion)
+			}
+			if len(reloaded.PostInstall) != 1 || reloaded.PostInstall[0] != "echo after" {
+				t.Errorf("PostInstall lost in round-trip: %v", reloaded.PostInstall)
+			}
+			if len(reloaded.Bin) != 1 || reloaded.Bin[0] != "rg" {
+				t.Errorf("Bin lost in round-trip: %v", reloaded.Bin)
+			}
+		})
+	}
+}
+
+func TestSaveNewAppWritesYAML(t *testing.T) {
+	testRoot(t)
+
+	a := New("newapp")
+	a.Repository = RepositoryConfig{Type: "github", Owner: "o", Repo: "r"}
+	if err := a.Save(); err != nil {
+		t.Fatalf("Save() error: %v", err)
+	}
+
+	if filepath.Ext(a.Path()) != ".yaml" {
+		t.Errorf("Save() wrote %q, want a .yaml file", a.Path())
+	}
+	if _, err := os.Stat(a.Path()); err != nil {
+		t.Errorf("Save() did not create the file: %v", err)
+	}
+}
+
+func TestListApps(t *testing.T) {
+	testRoot(t)
+
+	if names, err := ListApps(); err != nil || len(names) != 0 {
+		t.Errorf("ListApps() on missing dir = %v, %v; want empty, nil", names, err)
+	}
+
+	writeApp(t, "zebra.yaml", githubYAML)
+	writeApp(t, "alpha.json", githubJSON)
+	writeApp(t, "middle.yml", githubYAML)
+	writeApp(t, "notes.txt", "ignored")
+
+	names, err := ListApps()
 	if err != nil {
-		t.Fatalf("Load() failed: %v", err)
+		t.Fatalf("ListApps() error: %v", err)
 	}
 
-	if config.Repository.Type != "http" {
-		t.Errorf("Repository.Type = %s, want http", config.Repository.Type)
+	want := []string{"alpha", "middle", "zebra"}
+	if len(names) != len(want) {
+		t.Fatalf("ListApps() = %v, want %v", names, want)
 	}
-	if config.Repository.URL != "https://example.com/releases" {
-		t.Errorf("Repository.URL = %s, want https://example.com/releases", config.Repository.URL)
-	}
-	if config.CurrentVersion != "v2.0.0" {
-		t.Errorf("CurrentVersion = %s, want v2.0.0", config.CurrentVersion)
-	}
-	if config.Applier != "archive" {
-		t.Errorf("Applier = %s, want archive", config.Applier)
+	for i := range want {
+		if names[i] != want[i] {
+			t.Errorf("ListApps()[%d] = %q, want %q (sorted)", i, names[i], want[i])
+		}
 	}
 }
 
-func TestLoad_WithDefaults(t *testing.T) {
-	tempDir := t.TempDir()
+func TestAppPathRejectsDuplicateNames(t *testing.T) {
+	testRoot(t)
+	writeApp(t, "dupe.yaml", githubYAML)
+	writeApp(t, "dupe.json", githubJSON)
 
-	configPath := filepath.Join(tempDir, "guppy.json")
-	// Config with minimal required fields, should apply defaults
-	configContent := `{
-  "repository": {
-    "type": "github",
-    "owner": "testowner",
-    "repo": "testrepo"
-  },
-  "target_path": "/usr/local/bin/app"
-}`
+	if _, err := AppPath("dupe"); err == nil {
+		t.Error("AppPath() accepted two files claiming the same name, want error")
+	}
+}
 
-	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
-		t.Fatalf("Failed to create config file: %v", err)
+func TestAppPathMissing(t *testing.T) {
+	testRoot(t)
+	if _, err := AppPath("ghost"); err == nil {
+		t.Error("AppPath() on a missing app should error")
+	}
+}
+
+func TestRemoveApp(t *testing.T) {
+	testRoot(t)
+	path := writeApp(t, "gone.yaml", githubYAML)
+
+	if err := RemoveApp("gone"); err != nil {
+		t.Fatalf("RemoveApp() error: %v", err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Error("RemoveApp() left the config file behind")
+	}
+	if err := RemoveApp("gone"); err == nil {
+		t.Error("RemoveApp() on a missing app should error")
+	}
+}
+
+func TestValidateName(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		wantErr bool
+	}{
+		{"simple", "ripgrep", false},
+		{"with dash", "my-app", false},
+		{"with underscore", "my_app", false},
+		{"with dot", "app.v2", false},
+		{"with digits", "s3cmd2", false},
+		{"empty", "", true},
+		{"parent traversal", "../evil", true},
+		{"embedded traversal", "a/../../b", true},
+		{"absolute path", "/etc/passwd", true},
+		{"slash", "owner/repo", true},
+		{"backslash", `..\evil`, true},
+		{"leading dot", ".hidden", true},
+		{"leading dash", "-flag", true},
+		{"space", "my app", true},
+		{"null byte", "app\x00", true},
 	}
 
-	config, err := Load(configPath)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := ValidateName(tt.input); (err != nil) != tt.wantErr {
+				t.Errorf("ValidateName(%q) error = %v, wantErr %v", tt.input, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestValidate(t *testing.T) {
+	tests := []struct {
+		name    string
+		app     App
+		wantErr bool
+	}{
+		{
+			name: "valid github",
+			app:  App{name: "a", Repository: RepositoryConfig{Type: "github", Owner: "o", Repo: "r"}, Applier: "binary"},
+		},
+		{
+			name: "valid http",
+			app:  App{name: "a", Repository: RepositoryConfig{Type: "http", URL: "https://example.com/r.json"}, Applier: "archive"},
+		},
+		{
+			name:    "github without owner",
+			app:     App{name: "a", Repository: RepositoryConfig{Type: "github", Repo: "r"}, Applier: "binary"},
+			wantErr: true,
+		},
+		{
+			name:    "github without repo",
+			app:     App{name: "a", Repository: RepositoryConfig{Type: "github", Owner: "o"}, Applier: "binary"},
+			wantErr: true,
+		},
+		{
+			name:    "http without url",
+			app:     App{name: "a", Repository: RepositoryConfig{Type: "http"}, Applier: "binary"},
+			wantErr: true,
+		},
+		{
+			name:    "unknown repository type",
+			app:     App{name: "a", Repository: RepositoryConfig{Type: "ftp"}, Applier: "binary"},
+			wantErr: true,
+		},
+		{
+			name:    "unknown applier",
+			app:     App{name: "a", Repository: RepositoryConfig{Type: "github", Owner: "o", Repo: "r"}, Applier: "magic"},
+			wantErr: true,
+		},
+		{
+			name: "archive applier may list several binaries",
+			app: App{name: "a", Repository: RepositoryConfig{Type: "github", Owner: "o", Repo: "r"},
+				Applier: "archive", Bin: []string{"one", "two"}},
+		},
+		{
+			name: "binary applier may not list several binaries",
+			app: App{name: "a", Repository: RepositoryConfig{Type: "github", Owner: "o", Repo: "r"},
+				Applier: "binary", Bin: []string{"one", "two"}},
+			wantErr: true,
+		},
+		{
+			name:    "invalid name",
+			app:     App{name: "../evil", Repository: RepositoryConfig{Type: "github", Owner: "o", Repo: "r"}, Applier: "binary"},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := tt.app.Validate(); (err != nil) != tt.wantErr {
+				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// The example configs ship as documentation; if the schema moves they should
+// fail here rather than in a user's terminal.
+func TestShippedExamplesLoad(t *testing.T) {
+	testRoot(t)
+
+	examples, err := filepath.Glob(filepath.Join("..", "..", "examples", "*.yaml"))
 	if err != nil {
-		t.Fatalf("Load() failed: %v", err)
+		t.Fatalf("Glob() error: %v", err)
+	}
+	if len(examples) == 0 {
+		t.Fatal("no example configs found")
 	}
 
-	// Check defaults were applied
-	if config.Applier != "binary" {
-		t.Errorf("Applier = %s, want binary (default)", config.Applier)
-	}
-	if config.DownloadDir == "" {
-		t.Error("DownloadDir should have default value")
-	}
-}
-
-func TestLoad_FileNotFound(t *testing.T) {
-	tempDir := t.TempDir()
-	nonexistentPath := filepath.Join(tempDir, "nonexistent.json")
-
-	_, err := Load(nonexistentPath)
-	if err == nil {
-		t.Error("Load() expected error for nonexistent file, got nil")
-	}
-}
-
-func TestLoad_InvalidJSON(t *testing.T) {
-	tempDir := t.TempDir()
-
-	configPath := filepath.Join(tempDir, "invalid.json")
-	invalidContent := `{ "repository": { "type": "github" }`
-
-	if err := os.WriteFile(configPath, []byte(invalidContent), 0644); err != nil {
-		t.Fatalf("Failed to create config file: %v", err)
-	}
-
-	_, err := Load(configPath)
-	if err == nil {
-		t.Error("Load() expected error for invalid JSON, got nil")
-	}
-}
-
-func TestLoad_UnknownTopLevelKey(t *testing.T) {
-	tempDir := t.TempDir()
-
-	configPath := filepath.Join(tempDir, "unknown-key.json")
-	configContent := `{
-  "repository": {
-    "type": "github",
-    "owner": "test",
-    "repo": "test"
-  },
-  "target_path": "/usr/local/bin/app",
-  "unknown_field": "should cause error"
-}`
-
-	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
-		t.Fatalf("Failed to create config file: %v", err)
-	}
-
-	_, err := Load(configPath)
-	if err == nil {
-		t.Error("Load() expected error for unknown key, got nil")
-	}
-}
-
-func TestLoad_UnknownRepositoryKey(t *testing.T) {
-	tempDir := t.TempDir()
-
-	configPath := filepath.Join(tempDir, "unknown-repo-key.json")
-	configContent := `{
-  "repository": {
-    "type": "github",
-    "owner": "test",
-    "repo": "test",
-    "unknown_repo_field": "should cause error"
-  },
-  "target_path": "/usr/local/bin/app"
-}`
-
-	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
-		t.Fatalf("Failed to create config file: %v", err)
-	}
-
-	_, err := Load(configPath)
-	if err == nil {
-		t.Error("Load() expected error for unknown repository key, got nil")
-	}
-}
-
-func TestValidate_ValidGitHubConfig(t *testing.T) {
-	config := &Config{
-		Repository: RepositoryConfig{
-			Type:  "github",
-			Owner: "testowner",
-			Repo:  "testrepo",
-		},
-		TargetPath: "/usr/local/bin/app",
-		Applier:    "binary",
-	}
-
-	err := config.Validate()
+	appsDir, err := AppsDir()
 	if err != nil {
-		t.Errorf("Validate() failed for valid GitHub config: %v", err)
+		t.Fatalf("AppsDir() error: %v", err)
 	}
-}
-
-func TestValidate_ValidHTTPConfig(t *testing.T) {
-	config := &Config{
-		Repository: RepositoryConfig{
-			Type: "http",
-			URL:  "https://example.com/releases",
-		},
-		TargetPath: "/usr/local/bin/app",
-		Applier:    "archive",
+	if err := os.MkdirAll(appsDir, 0755); err != nil {
+		t.Fatalf("failed to create apps dir: %v", err)
 	}
 
-	err := config.Validate()
-	if err != nil {
-		t.Errorf("Validate() failed for valid HTTP config: %v", err)
-	}
-}
+	for _, example := range examples {
+		t.Run(filepath.Base(example), func(t *testing.T) {
+			body, err := os.ReadFile(example)
+			if err != nil {
+				t.Fatalf("failed to read %s: %v", example, err)
+			}
 
-func TestValidate_MissingRepositoryType(t *testing.T) {
-	config := &Config{
-		TargetPath: "/usr/local/bin/app",
-		Applier:    "binary",
-	}
+			name := strings.TrimSuffix(filepath.Base(example), ".yaml")
+			path := writeApp(t, name+".yaml", string(body))
 
-	err := config.Validate()
-	if err == nil {
-		t.Error("Validate() expected error for missing repository type, got nil")
-	}
-}
-
-func TestValidate_InvalidRepositoryType(t *testing.T) {
-	config := &Config{
-		Repository: RepositoryConfig{
-			Type: "invalid",
-		},
-		TargetPath: "/usr/local/bin/app",
-		Applier:    "binary",
-	}
-
-	err := config.Validate()
-	if err == nil {
-		t.Error("Validate() expected error for invalid repository type, got nil")
-	}
-}
-
-func TestValidate_GitHubMissingOwner(t *testing.T) {
-	config := &Config{
-		Repository: RepositoryConfig{
-			Type: "github",
-			Repo: "testrepo",
-		},
-		TargetPath: "/usr/local/bin/app",
-		Applier:    "binary",
-	}
-
-	err := config.Validate()
-	if err == nil {
-		t.Error("Validate() expected error for missing GitHub owner, got nil")
-	}
-}
-
-func TestValidate_GitHubMissingRepo(t *testing.T) {
-	config := &Config{
-		Repository: RepositoryConfig{
-			Type:  "github",
-			Owner: "testowner",
-		},
-		TargetPath: "/usr/local/bin/app",
-		Applier:    "binary",
-	}
-
-	err := config.Validate()
-	if err == nil {
-		t.Error("Validate() expected error for missing GitHub repo, got nil")
-	}
-}
-
-func TestValidate_HTTPMissingURL(t *testing.T) {
-	config := &Config{
-		Repository: RepositoryConfig{
-			Type: "http",
-		},
-		TargetPath: "/usr/local/bin/app",
-		Applier:    "binary",
-	}
-
-	err := config.Validate()
-	if err == nil {
-		t.Error("Validate() expected error for missing HTTP URL, got nil")
-	}
-}
-
-func TestValidate_MissingTargetPath(t *testing.T) {
-	config := &Config{
-		Repository: RepositoryConfig{
-			Type:  "github",
-			Owner: "testowner",
-			Repo:  "testrepo",
-		},
-		Applier: "binary",
-	}
-
-	err := config.Validate()
-	if err == nil {
-		t.Error("Validate() expected error for missing target path, got nil")
-	}
-}
-
-func TestValidate_MissingApplier(t *testing.T) {
-	config := &Config{
-		Repository: RepositoryConfig{
-			Type:  "github",
-			Owner: "testowner",
-			Repo:  "testrepo",
-		},
-		TargetPath: "/usr/local/bin/app",
-	}
-
-	err := config.Validate()
-	if err == nil {
-		t.Error("Validate() expected error for missing applier, got nil")
-	}
-}
-
-func TestValidate_InvalidApplierType(t *testing.T) {
-	config := &Config{
-		Repository: RepositoryConfig{
-			Type:  "github",
-			Owner: "testowner",
-			Repo:  "testrepo",
-		},
-		TargetPath: "/usr/local/bin/app",
-		Applier:    "invalid",
-	}
-
-	err := config.Validate()
-	if err == nil {
-		t.Error("Validate() expected error for invalid applier type, got nil")
-	}
-}
-
-func TestSave(t *testing.T) {
-	tempDir := t.TempDir()
-
-	config := &Config{
-		Repository: RepositoryConfig{
-			Type:      "github",
-			Owner:     "testowner",
-			Repo:      "testrepo",
-			Token:     "ghp_token123",
-			AssetName: "app-linux",
-		},
-		CurrentVersion: "v1.2.3",
-		TargetPath:     "/usr/local/bin/app",
-		Applier:        "binary",
-		DownloadDir:    "/tmp/guppy",
-	}
-
-	configPath := filepath.Join(tempDir, "saved-config.json")
-	err := config.Save(configPath)
-	if err != nil {
-		t.Fatalf("Save() failed: %v", err)
-	}
-
-	// Verify file was created
-	if _, err := os.Stat(configPath); os.IsNotExist(err) {
-		t.Fatal("Save() did not create config file")
-	}
-
-	// Load the saved config and verify
-	loadedConfig, err := Load(configPath)
-	if err != nil {
-		t.Fatalf("Failed to load saved config: %v", err)
-	}
-
-	if loadedConfig.Repository.Type != config.Repository.Type {
-		t.Errorf("Saved Repository.Type = %s, want %s", loadedConfig.Repository.Type, config.Repository.Type)
-	}
-	if loadedConfig.Repository.Owner != config.Repository.Owner {
-		t.Errorf("Saved Repository.Owner = %s, want %s", loadedConfig.Repository.Owner, config.Repository.Owner)
-	}
-	if loadedConfig.Repository.Repo != config.Repository.Repo {
-		t.Errorf("Saved Repository.Repo = %s, want %s", loadedConfig.Repository.Repo, config.Repository.Repo)
-	}
-	if loadedConfig.CurrentVersion != config.CurrentVersion {
-		t.Errorf("Saved CurrentVersion = %s, want %s", loadedConfig.CurrentVersion, config.CurrentVersion)
-	}
-	if loadedConfig.TargetPath != config.TargetPath {
-		t.Errorf("Saved TargetPath = %s, want %s", loadedConfig.TargetPath, config.TargetPath)
-	}
-	if loadedConfig.Applier != config.Applier {
-		t.Errorf("Saved Applier = %s, want %s", loadedConfig.Applier, config.Applier)
-	}
-}
-
-func TestSave_CreatesDirectory(t *testing.T) {
-	tempDir := t.TempDir()
-
-	config := &Config{
-		Repository: RepositoryConfig{
-			Type:  "github",
-			Owner: "test",
-			Repo:  "test",
-		},
-		TargetPath: "/usr/local/bin/app",
-		Applier:    "binary",
-	}
-
-	// Save to a nested directory that doesn't exist
-	configPath := filepath.Join(tempDir, "nested", "dir", "config.json")
-	err := config.Save(configPath)
-	if err != nil {
-		t.Fatalf("Save() failed: %v", err)
-	}
-
-	// Verify directory was created
-	dir := filepath.Dir(configPath)
-	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		t.Error("Save() did not create parent directory")
-	}
-
-	// Verify file exists
-	if _, err := os.Stat(configPath); os.IsNotExist(err) {
-		t.Error("Save() did not create config file")
-	}
-}
-
-func TestSave_HTTPConfig(t *testing.T) {
-	tempDir := t.TempDir()
-
-	config := &Config{
-		Repository: RepositoryConfig{
-			Type: "http",
-			URL:  "https://example.com/releases",
-		},
-		CurrentVersion: "v3.0.0",
-		TargetPath:     "/opt/app/bin",
-		Applier:        "archive",
-		DownloadDir:    "/var/tmp/downloads",
-	}
-
-	configPath := filepath.Join(tempDir, "http-config.json")
-	err := config.Save(configPath)
-	if err != nil {
-		t.Fatalf("Save() failed: %v", err)
-	}
-
-	// Load and verify
-	loadedConfig, err := Load(configPath)
-	if err != nil {
-		t.Fatalf("Failed to load saved HTTP config: %v", err)
-	}
-
-	if loadedConfig.Repository.Type != "http" {
-		t.Errorf("Saved Repository.Type = %s, want http", loadedConfig.Repository.Type)
-	}
-	if loadedConfig.Repository.URL != config.Repository.URL {
-		t.Errorf("Saved Repository.URL = %s, want %s", loadedConfig.Repository.URL, config.Repository.URL)
-	}
-}
-
-func TestGetDefaultConfigPath(t *testing.T) {
-	path := GetDefaultConfigPath()
-
-	if path == "" {
-		t.Error("GetDefaultConfigPath() returned empty string")
-	}
-
-	// Should end with guppy.json
-	if filepath.Base(path) != "guppy.json" {
-		t.Errorf("GetDefaultConfigPath() = %s, should end with guppy.json", path)
-	}
-}
-
-func TestValidateConfigKeys_ValidConfig(t *testing.T) {
-	tempDir := t.TempDir()
-
-	configPath := filepath.Join(tempDir, "valid.json")
-	configContent := `{
-  "repository": {
-    "type": "github",
-    "owner": "test",
-    "repo": "test"
-  },
-  "current_version": "v1.0.0",
-  "target_path": "/usr/local/bin/app",
-  "applier": "binary",
-  "download_dir": "/tmp"
-}`
-
-	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
-		t.Fatalf("Failed to create config file: %v", err)
-	}
-
-	err := validateConfigKeys(configPath)
-	if err != nil {
-		t.Errorf("validateConfigKeys() failed for valid config: %v", err)
-	}
-}
-
-func TestValidateConfigKeys_UnknownTopLevel(t *testing.T) {
-	tempDir := t.TempDir()
-
-	configPath := filepath.Join(tempDir, "unknown.json")
-	configContent := `{
-  "repository": {
-    "type": "github"
-  },
-  "target_path": "/usr/local/bin/app",
-  "unknown_key": "value"
-}`
-
-	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
-		t.Fatalf("Failed to create config file: %v", err)
-	}
-
-	err := validateConfigKeys(configPath)
-	if err == nil {
-		t.Error("validateConfigKeys() expected error for unknown top-level key, got nil")
-	}
-}
-
-func TestValidateConfigKeys_UnknownRepoKey(t *testing.T) {
-	tempDir := t.TempDir()
-
-	configPath := filepath.Join(tempDir, "unknown-repo.json")
-	configContent := `{
-  "repository": {
-    "type": "github",
-    "unknown_repo_key": "value"
-  },
-  "target_path": "/usr/local/bin/app"
-}`
-
-	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
-		t.Fatalf("Failed to create config file: %v", err)
-	}
-
-	err := validateConfigKeys(configPath)
-	if err == nil {
-		t.Error("validateConfigKeys() expected error for unknown repository key, got nil")
-	}
-}
-
-func TestLoad_EmptyConfigFile(t *testing.T) {
-	tempDir := t.TempDir()
-
-	configPath := filepath.Join(tempDir, "empty.json")
-	if err := os.WriteFile(configPath, []byte("{}"), 0644); err != nil {
-		t.Fatalf("Failed to create config file: %v", err)
-	}
-
-	_, err := Load(configPath)
-	if err == nil {
-		t.Error("Load() expected error for empty config (missing required fields), got nil")
-	}
-}
-
-func TestLoad_AllRepositoryFields(t *testing.T) {
-	tempDir := t.TempDir()
-
-	configPath := filepath.Join(tempDir, "all-fields.json")
-	configContent := `{
-  "repository": {
-    "type": "github",
-    "owner": "testowner",
-    "repo": "testrepo",
-    "token": "ghp_token",
-    "asset_name": "app-linux",
-    "url": "https://example.com"
-  },
-  "target_path": "/usr/local/bin/app",
-  "applier": "binary"
-}`
-
-	if err := os.WriteFile(configPath, []byte(configContent), 0644); err != nil {
-		t.Fatalf("Failed to create config file: %v", err)
-	}
-
-	config, err := Load(configPath)
-	if err != nil {
-		t.Fatalf("Load() failed: %v", err)
-	}
-
-	// Verify all repository fields were loaded
-	if config.Repository.Type != "github" {
-		t.Errorf("Repository.Type = %s, want github", config.Repository.Type)
-	}
-	if config.Repository.Owner != "testowner" {
-		t.Errorf("Repository.Owner = %s, want testowner", config.Repository.Owner)
-	}
-	if config.Repository.Repo != "testrepo" {
-		t.Errorf("Repository.Repo = %s, want testrepo", config.Repository.Repo)
-	}
-	if config.Repository.Token != "ghp_token" {
-		t.Errorf("Repository.Token = %s, want ghp_token", config.Repository.Token)
-	}
-	if config.Repository.AssetName != "app-linux" {
-		t.Errorf("Repository.AssetName = %s, want app-linux", config.Repository.AssetName)
-	}
-	if config.Repository.URL != "https://example.com" {
-		t.Errorf("Repository.URL = %s, want https://example.com", config.Repository.URL)
+			if _, err := LoadFile(name, path); err != nil {
+				t.Errorf("example %s does not load: %v", filepath.Base(example), err)
+			}
+		})
 	}
 }

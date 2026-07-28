@@ -1,0 +1,28 @@
+# A service that has to be stopped and migrated around an update.
+#
+# Copy to <config>/apps/myservice.yaml and edit to match your deployment.
+
+repository:
+  type: github
+  owner: myorg
+  repo: myservice
+
+current_version: ""
+
+applier: archive
+
+bin:
+  - myservice
+
+# Runs after the download has been fetched and verified, so a failed download
+# never leaves the service stopped.
+pre_install:
+  - systemctl --user stop myservice
+
+# Runs with the install directory as the working directory. GUPPY_APP,
+# GUPPY_VERSION, GUPPY_PREVIOUS_VERSION, GUPPY_INSTALL_DIR, GUPPY_BIN_DIR and
+# GUPPY_DOWNLOAD are all set.
+post_install:
+  - ./bin/migrate --up
+  - systemctl --user start myservice
+  - echo "myservice upgraded from ${GUPPY_PREVIOUS_VERSION:-nothing} to $GUPPY_VERSION"

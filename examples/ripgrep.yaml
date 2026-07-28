@@ -1,0 +1,27 @@
+# An archive release with the binary nested under a versioned directory.
+#
+# Copy to <config>/apps/ripgrep.yaml — run `guppy bin` to find the guppy
+# folder, or just use: guppy add BurntSushi/ripgrep --applier archive --bin rg
+
+repository:
+  type: github
+  owner: BurntSushi
+  repo: ripgrep
+  # Optional. Picks a release asset by exact name, or by pattern. A pattern
+  # is what you want here: the asset name contains the version, so a literal
+  # name would stop matching at the next release. Anchor it with $ so it
+  # doesn't also match the .tar.gz.sha256 sidecar.
+  asset_name: x86_64-unknown-linux-musl\.tar\.gz$
+  # Optional. Needed for private repos, or to raise the API rate limit.
+  # token: github_pat_xxxxxxxxxxxxxxxxxxxx
+
+# Guppy maintains this itself after each install. Leave it empty to install
+# the latest release.
+current_version: ""
+
+applier: archive
+
+# The archive unpacks into ripgrep-<version>-<platform>/, so naming the file
+# rather than a path keeps this working across releases.
+bin:
+  - rg

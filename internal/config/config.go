@@ -5,205 +5,283 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"slices"
+	"strings"
 
 	"github.com/spf13/viper"
+	"gopkg.in/yaml.v3"
 )
 
-// Config represents the application configuration
-type Config struct {
-	Repository   RepositoryConfig `json:"repository" mapstructure:"repository"`
-	CurrentVersion string         `json:"current_version" mapstructure:"current_version"`
-	TargetPath   string           `json:"target_path" mapstructure:"target_path"`
-	Applier      string           `json:"applier" mapstructure:"applier"`
-	DownloadDir  string           `json:"download_dir" mapstructure:"download_dir"`
+// Extensions accepted for app config files, in the order they're searched.
+// The first entry is what "guppy add" writes.
+var Extensions = []string{".yaml", ".yml", ".json"}
+
+// App is the configuration for a single managed application. It lives in its
+// own file under <config>/apps/, and the app's name comes from the filename.
+type App struct {
+	Repository     RepositoryConfig `json:"repository" yaml:"repository" mapstructure:"repository"`
+	CurrentVersion string           `json:"current_version" yaml:"current_version" mapstructure:"current_version"`
+	Applier        string           `json:"applier" yaml:"applier" mapstructure:"applier"`
+
+	// Bin lists the binaries to link into the bin directory. Each entry is
+	// resolved against the install directory; see ResolveBin. Defaults to the
+	// app's own name.
+	Bin []string `json:"bin,omitempty" yaml:"bin,omitempty" mapstructure:"bin"`
+
+	// PreInstall and PostInstall are shell commands run before and after the
+	// download is applied.
+	PreInstall  []string `json:"pre_install,omitempty" yaml:"pre_install,omitempty" mapstructure:"pre_install"`
+	PostInstall []string `json:"post_install,omitempty" yaml:"post_install,omitempty" mapstructure:"post_install"`
+
+	name string // from the filename
+	path string // where it was loaded from, so Save round-trips the same format
 }
 
 // RepositoryConfig represents repository configuration
 type RepositoryConfig struct {
-	Type      string `json:"type" mapstructure:"type"`
-	Owner     string `json:"owner,omitempty" mapstructure:"owner"`
-	Repo      string `json:"repo,omitempty" mapstructure:"repo"`
-	Token     string `json:"token,omitempty" mapstructure:"token"`
-	AssetName string `json:"asset_name,omitempty" mapstructure:"asset_name"`
-	URL       string `json:"url,omitempty" mapstructure:"url"`
+	Type      string `json:"type" yaml:"type" mapstructure:"type"`
+	Owner     string `json:"owner,omitempty" yaml:"owner,omitempty" mapstructure:"owner"`
+	Repo      string `json:"repo,omitempty" yaml:"repo,omitempty" mapstructure:"repo"`
+	Token     string `json:"token,omitempty" yaml:"token,omitempty" mapstructure:"token"`
+	AssetName string `json:"asset_name,omitempty" yaml:"asset_name,omitempty" mapstructure:"asset_name"`
+	URL       string `json:"url,omitempty" yaml:"url,omitempty" mapstructure:"url"`
 }
 
-// Load loads configuration from a JSON file
-func Load(configPath string) (*Config, error) {
-	v := viper.New()
+// App names become filenames and directory names, so they're restricted rather
+// than sanitized: anything outside this set is rejected up front.
+var validName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 
-	// Set config file details
-	v.SetConfigType("json")
-
-	if configPath != "" {
-		// Use specified config file
-		v.SetConfigFile(configPath)
-	} else {
-		// Look for config in common locations
-		v.SetConfigName("guppy")
-		v.AddConfigPath(".")
-		v.AddConfigPath("$HOME/.config/guppy")
-		v.AddConfigPath("/etc/guppy")
+// ValidateName reports whether name is usable as an app name.
+func ValidateName(name string) error {
+	if name == "" {
+		return fmt.Errorf("app name is required")
 	}
-
-	// Set defaults
-	v.SetDefault("applier", "binary")
-	v.SetDefault("download_dir", filepath.Join(os.TempDir(), "guppy"))
-	v.SetDefault("repository.type", "github")
-
-	// Read config file
-	if err := v.ReadInConfig(); err != nil {
-		return nil, fmt.Errorf("error reading config file: %w", err)
+	if !validName.MatchString(name) || strings.Contains(name, "..") {
+		return fmt.Errorf("invalid app name %q: use letters, numbers, dot, dash and underscore", name)
 	}
-
-	// Check for unknown keys before unmarshaling
-	configFile := v.ConfigFileUsed()
-	if err := validateConfigKeys(configFile); err != nil {
-		return nil, err
-	}
-
-	var config Config
-	if err := v.Unmarshal(&config); err != nil {
-		return nil, fmt.Errorf("error unmarshaling config: %w", err)
-	}
-
-	// Validate required fields
-	if err := config.Validate(); err != nil {
-		return nil, err
-	}
-
-	return &config, nil
-}
-
-// validateConfigKeys checks for unknown keys in the config file
-func validateConfigKeys(configPath string) error {
-	// Read the config file
-	data, err := os.ReadFile(configPath)
-	if err != nil {
-		return fmt.Errorf("error reading config file for validation: %w", err)
-	}
-
-	// Parse as generic map
-	var rawConfig map[string]interface{}
-	if err := json.Unmarshal(data, &rawConfig); err != nil {
-		return fmt.Errorf("error parsing config file: %w", err)
-	}
-
-	// Define valid top-level keys
-	validKeys := map[string]bool{
-		"repository":      true,
-		"current_version": true,
-		"target_path":     true,
-		"applier":         true,
-		"download_dir":    true,
-	}
-
-	// Check for unknown top-level keys
-	for key := range rawConfig {
-		if !validKeys[key] {
-			return fmt.Errorf("unknown configuration key: %s", key)
-		}
-	}
-
-	// Validate repository keys if present
-	if repo, ok := rawConfig["repository"].(map[string]interface{}); ok {
-		validRepoKeys := map[string]bool{
-			"type":       true,
-			"owner":      true,
-			"repo":       true,
-			"token":      true,
-			"asset_name": true,
-			"url":        true,
-		}
-
-		for key := range repo {
-			if !validRepoKeys[key] {
-				return fmt.Errorf("unknown configuration key in repository: %s", key)
-			}
-		}
-	}
-
 	return nil
 }
 
+// New returns an empty app config with the given name.
+func New(name string) *App {
+	return &App{name: name, Applier: "binary"}
+}
+
+// Name returns the app's name.
+func (a *App) Name() string { return a.name }
+
+// Path returns the file the app was loaded from, or "" if it has never been
+// written.
+func (a *App) Path() string { return a.path }
+
+// AppPath returns the path of the config file for name, whichever accepted
+// extension it uses. It returns an error if more than one file claims the name.
+func AppPath(name string) (string, error) {
+	if err := ValidateName(name); err != nil {
+		return "", err
+	}
+
+	dir, err := AppsDir()
+	if err != nil {
+		return "", err
+	}
+
+	var found []string
+	for _, ext := range Extensions {
+		path := filepath.Join(dir, name+ext)
+		if _, err := os.Stat(path); err == nil {
+			found = append(found, path)
+		}
+	}
+
+	switch len(found) {
+	case 0:
+		return "", fmt.Errorf("no app named %q (looked in %s)", name, dir)
+	case 1:
+		return found[0], nil
+	default:
+		return "", fmt.Errorf("multiple config files for app %q: %s", name, strings.Join(found, ", "))
+	}
+}
+
+// ListApps returns the names of all configured apps, sorted.
+func ListApps() ([]string, error) {
+	dir, err := AppsDir()
+	if err != nil {
+		return nil, err
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("error reading apps directory: %w", err)
+	}
+
+	seen := make(map[string]bool)
+	var names []string
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		ext := filepath.Ext(entry.Name())
+		if !slices.Contains(Extensions, ext) {
+			continue
+		}
+		name := strings.TrimSuffix(entry.Name(), ext)
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		names = append(names, name)
+	}
+
+	slices.Sort(names)
+	return names, nil
+}
+
+// LoadApp loads the config for a named app.
+func LoadApp(name string) (*App, error) {
+	path, err := AppPath(name)
+	if err != nil {
+		return nil, err
+	}
+	return LoadFile(name, path)
+}
+
+// LoadFile loads an app config from an explicit path. The format is inferred
+// from the file extension.
+func LoadFile(name, path string) (*App, error) {
+	v := viper.New()
+	v.SetConfigFile(path)
+
+	v.SetDefault("applier", "binary")
+	v.SetDefault("repository.type", "github")
+
+	if err := v.ReadInConfig(); err != nil {
+		return nil, fmt.Errorf("error reading config file %s: %w", path, err)
+	}
+
+	var app App
+	// UnmarshalExact rejects keys that don't map to a field, which catches
+	// typos in hand-written config regardless of format.
+	if err := v.UnmarshalExact(&app); err != nil {
+		return nil, fmt.Errorf("error reading %s: %w", path, err)
+	}
+
+	app.name = name
+	app.path = path
+
+	if err := app.Validate(); err != nil {
+		return nil, fmt.Errorf("error in %s: %w", path, err)
+	}
+
+	return &app, nil
+}
+
 // Validate validates the configuration
-func (c *Config) Validate() error {
-	if c.Repository.Type == "" {
+func (a *App) Validate() error {
+	if err := ValidateName(a.name); err != nil {
+		return err
+	}
+
+	if a.Repository.Type == "" {
 		return fmt.Errorf("repository type is required")
 	}
 
-	// Validate repository type
-	if c.Repository.Type != "github" && c.Repository.Type != "http" {
-		return fmt.Errorf("invalid repository type: %s (valid values: github, http)", c.Repository.Type)
+	if a.Repository.Type != "github" && a.Repository.Type != "http" {
+		return fmt.Errorf("invalid repository type: %s (valid values: github, http)", a.Repository.Type)
 	}
 
-	if c.Repository.Type == "github" {
-		if c.Repository.Owner == "" {
+	if a.Repository.Type == "github" {
+		if a.Repository.Owner == "" {
 			return fmt.Errorf("repository owner is required for GitHub")
 		}
-		if c.Repository.Repo == "" {
+		if a.Repository.Repo == "" {
 			return fmt.Errorf("repository repo is required for GitHub")
 		}
 	}
 
-	if c.Repository.Type == "http" {
-		if c.Repository.URL == "" {
+	if a.Repository.Type == "http" {
+		if a.Repository.URL == "" {
 			return fmt.Errorf("repository url is required for HTTP")
 		}
 	}
 
-	if c.TargetPath == "" {
-		return fmt.Errorf("target_path is required")
-	}
-
-	if c.Applier == "" {
+	if a.Applier == "" {
 		return fmt.Errorf("applier is required")
 	}
 
-	// Validate applier type
-	if c.Applier != "binary" && c.Applier != "archive" {
-		return fmt.Errorf("invalid applier type: %s (valid values: binary, archive)", c.Applier)
+	if a.Applier != "binary" && a.Applier != "archive" {
+		return fmt.Errorf("invalid applier type: %s (valid values: binary, archive)", a.Applier)
+	}
+
+	// The binary applier installs the one downloaded file, so it has exactly
+	// one binary to offer.
+	if a.Applier == "binary" && len(a.Bin) > 1 {
+		return fmt.Errorf("the binary applier installs a single file, but bin lists %d entries", len(a.Bin))
 	}
 
 	return nil
 }
 
-// Save saves the configuration to a JSON file
-func (c *Config) Save(configPath string) error {
-	v := viper.New()
-	v.SetConfigType("json")
+// Binaries returns the bin entries to link, defaulting to the app's own name.
+func (a *App) Binaries() []string {
+	if len(a.Bin) > 0 {
+		return a.Bin
+	}
+	return []string{a.name}
+}
 
-	// Set all config values
-	v.Set("repository", c.Repository)
-	v.Set("current_version", c.CurrentVersion)
-	v.Set("target_path", c.TargetPath)
-	v.Set("applier", c.Applier)
-	v.Set("download_dir", c.DownloadDir)
+// Save writes the app config back to the file it was loaded from, creating it
+// as YAML under the apps directory if it has never been written.
+func (a *App) Save() error {
+	if a.path == "" {
+		dir, err := AppsDir()
+		if err != nil {
+			return err
+		}
+		if err := ValidateName(a.name); err != nil {
+			return err
+		}
+		a.path = filepath.Join(dir, a.name+Extensions[0])
+	}
 
-	// Create directory if it doesn't exist
-	dir := filepath.Dir(configPath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	var (
+		data []byte
+		err  error
+	)
+	if filepath.Ext(a.path) == ".json" {
+		data, err = json.MarshalIndent(a, "", "  ")
+		data = append(data, '\n')
+	} else {
+		data, err = yaml.Marshal(a)
+	}
+	if err != nil {
+		return fmt.Errorf("error encoding config: %w", err)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(a.path), 0755); err != nil {
 		return fmt.Errorf("error creating config directory: %w", err)
 	}
 
-	// Write config file
-	if err := v.WriteConfigAs(configPath); err != nil {
+	if err := os.WriteFile(a.path, data, 0644); err != nil {
 		return fmt.Errorf("error writing config file: %w", err)
 	}
 
 	return nil
 }
 
-// GetDefaultConfigPath returns the default config file path
-// The config file should be in the same directory as the guppy executable
-func GetDefaultConfigPath() string {
-	// Get the executable path
-	exePath, err := os.Executable()
+// RemoveApp deletes an app's config file.
+func RemoveApp(name string) error {
+	path, err := AppPath(name)
 	if err != nil {
-		return "guppy.json"
+		return err
 	}
-
-	// Return path to guppy.json in the executable directory
-	exeDir := filepath.Dir(exePath)
-	return filepath.Join(exeDir, "guppy.json")
+	if err := os.Remove(path); err != nil {
+		return fmt.Errorf("error removing config file: %w", err)
+	}
+	return nil
 }
