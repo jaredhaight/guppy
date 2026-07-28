@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -164,7 +165,7 @@ func TestGetLatestRelease(t *testing.T) {
 			defer server.Close()
 
 			h := NewHTTPRepository(server.URL)
-			release, err := h.GetLatestRelease()
+			release, err := h.GetLatestRelease(context.Background())
 
 			if tt.wantErr {
 				if err == nil {
@@ -180,77 +181,6 @@ func TestGetLatestRelease(t *testing.T) {
 
 			if release.Version != tt.expectedVersion {
 				t.Errorf("GetLatestRelease() version = %q, want %q", release.Version, tt.expectedVersion)
-			}
-		})
-	}
-}
-
-func TestGetRelease(t *testing.T) {
-	releases := []httpRelease{
-		{Version: "1.0.0", URL: "http://example.com/1.0.0"},
-		{Version: "2.0.0", URL: "http://example.com/2.0.0"},
-		{Version: "3.0.0", URL: "http://example.com/3.0.0"},
-	}
-
-	tests := []struct {
-		name            string
-		requestVersion  string
-		expectedVersion string
-		wantErr         bool
-	}{
-		{
-			name:            "exact match",
-			requestVersion:  "2.0.0",
-			expectedVersion: "2.0.0",
-			wantErr:         false,
-		},
-		{
-			name:            "first release",
-			requestVersion:  "1.0.0",
-			expectedVersion: "1.0.0",
-			wantErr:         false,
-		},
-		{
-			name:            "last release",
-			requestVersion:  "3.0.0",
-			expectedVersion: "3.0.0",
-			wantErr:         false,
-		},
-		{
-			name:           "non-existent version",
-			requestVersion: "4.0.0",
-			wantErr:        true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Create a test server
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				w.Header().Set("Content-Type", "application/json")
-				if err := json.NewEncoder(w).Encode(releases); err != nil {
-					t.Errorf("failed to encode response: %v", err)
-				}
-			}))
-			defer server.Close()
-
-			h := NewHTTPRepository(server.URL)
-			release, err := h.GetRelease(tt.requestVersion)
-
-			if tt.wantErr {
-				if err == nil {
-					t.Errorf("GetRelease() expected error, got nil")
-				}
-				return
-			}
-
-			if err != nil {
-				t.Errorf("GetRelease() unexpected error: %v", err)
-				return
-			}
-
-			if release.Version != tt.expectedVersion {
-				t.Errorf("GetRelease() version = %q, want %q", release.Version, tt.expectedVersion)
 			}
 		})
 	}
@@ -369,7 +299,7 @@ func TestDownload(t *testing.T) {
 				Checksum:    tt.checksum,
 			}
 
-			err := h.Download(release, destFile)
+			err := h.Download(context.Background(), release, destFile)
 
 			if tt.wantErr {
 				if err == nil {

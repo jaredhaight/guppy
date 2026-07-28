@@ -44,21 +44,6 @@ func Verify(filePath string, checksum string) (bool, error) {
 	return strings.EqualFold(strings.TrimSpace(expected), actual), nil
 }
 
-// VerifySHA256 verifies the SHA256 checksum of a file against a bare hex value.
-func VerifySHA256(filePath string, expectedChecksum string) (bool, error) {
-	actual, err := hashFile(filePath, sha256.New())
-	if err != nil {
-		return false, err
-	}
-
-	return strings.EqualFold(strings.TrimSpace(expectedChecksum), actual), nil
-}
-
-// CalculateSHA256 calculates the SHA256 checksum of a file
-func CalculateSHA256(filePath string) (string, error) {
-	return hashFile(filePath, sha256.New())
-}
-
 // hashFile streams a file through hasher and returns the hex digest.
 func hashFile(filePath string, hasher hash.Hash) (string, error) {
 	file, err := os.Open(filePath)

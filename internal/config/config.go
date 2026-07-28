@@ -9,7 +9,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/jaredhaight/guppy/pkg/repository"
+	"github.com/jaredhaight/guppy/internal/repository"
 	"github.com/spf13/viper"
 	"gopkg.in/yaml.v3"
 )

@@ -33,7 +33,7 @@ linters:
       # MD5 and SHA-1 are part of the documented releases.json format, kept
       # for compatibility with existing feeds. Guppy prefers SHA-256 when a
       # feed offers a choice and warns when it has to fall back.
-      - path: pkg/checksum/checksum\.go
+      - path: internal/checksum/checksum\.go
         linters:
           - gosec
         text: "(G401|G501|G505)"

@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jaredhaight/guppy/pkg/version"
+	"github.com/jaredhaight/guppy/internal/version"
 )
 
 // GitHubRepository implements Repository for GitHub releases
@@ -81,50 +82,11 @@ type githubRelease struct {
 }
 
 // GetLatestRelease returns the latest release from GitHub
-func (g *GitHubRepository) GetLatestRelease() (*Release, error) {
+func (g *GitHubRepository) GetLatestRelease(ctx context.Context) (*Release, error) {
 	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/releases/latest", g.Owner, g.Repo)
 	g.debugLog("Fetching latest release from URL: %s", url)
 
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		return nil, fmt.Errorf("error creating request: %w", err)
-	}
-
-	req.Header.Set("User-Agent", "guppy-updater")
-	req.Header.Set("Accept", "application/vnd.github.v3+json")
-
-	g.setAuth(req)
-
-	resp, err := g.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("error fetching release: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("GitHub API returned status %d: %s", resp.StatusCode, string(body))
-	}
-
-	var ghRelease githubRelease
-	if err := json.NewDecoder(io.LimitReader(resp.Body, MaxFeedBytes)).Decode(&ghRelease); err != nil {
-		return nil, fmt.Errorf("error decoding response: %w", err)
-	}
-
-	return g.convertGitHubRelease(&ghRelease)
-}
-
-// GetRelease returns a specific release by version
-func (g *GitHubRepository) GetRelease(version string) (*Release, error) {
-	// Ensure version has 'v' prefix for GitHub tags
-	if !strings.HasPrefix(version, "v") {
-		version = "v" + version
-	}
-
-	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/releases/tags/%s", g.Owner, g.Repo, version)
-	g.debugLog("Fetching release for version %s from URL: %s", version, url)
-
-	req, err := http.NewRequest("GET", url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("error creating request: %w", err)
 	}
@@ -159,7 +121,7 @@ func (g *GitHubRepository) CompareVersions(current, latest string) (bool, error)
 }
 
 // Download downloads a release to the specified destination
-func (g *GitHubRepository) Download(release *Release, dest string) error {
+func (g *GitHubRepository) Download(ctx context.Context, release *Release, dest string) error {
 	if release.DownloadURL == "" {
 		return fmt.Errorf("no download URL in release")
 	}
@@ -171,7 +133,7 @@ func (g *GitHubRepository) Download(release *Release, dest string) error {
 	}
 	g.debugLog("Downloading from URL: %s to %s", release.DownloadURL, dest)
 
-	req, err := http.NewRequest("GET", release.DownloadURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, release.DownloadURL, nil)
 	if err != nil {
 		return fmt.Errorf("error creating download request: %w", err)
 	}

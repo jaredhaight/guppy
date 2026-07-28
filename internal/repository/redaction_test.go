@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -94,7 +95,7 @@ func TestDebugOutputNeverContainsToken(t *testing.T) {
 		}
 		_ = resp.Body.Close()
 
-		if err := repo.Download(&Release{
+		if err := repo.Download(context.Background(), &Release{
 			Version:     "v1.2.3",
 			DownloadURL: server.URL + "/download",
 			FileName:    "tool",

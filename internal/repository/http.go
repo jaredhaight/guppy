@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,7 +10,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/jaredhaight/guppy/pkg/version"
+	"github.com/jaredhaight/guppy/internal/version"
 )
 
 // HTTPRepository implements Repository for HTTP-based releases
@@ -49,10 +50,10 @@ type httpRelease struct {
 }
 
 // fetchReleases fetches and parses the releases.json file
-func (h *HTTPRepository) fetchReleases() ([]httpRelease, error) {
+func (h *HTTPRepository) fetchReleases(ctx context.Context) ([]httpRelease, error) {
 	h.debugLog("Fetching releases from URL: %s", h.URL)
 
-	req, err := http.NewRequest("GET", h.URL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, h.URL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("error creating request: %w", err)
 	}
@@ -80,8 +81,8 @@ func (h *HTTPRepository) fetchReleases() ([]httpRelease, error) {
 }
 
 // GetLatestRelease returns the latest release by comparing all versions
-func (h *HTTPRepository) GetLatestRelease() (*Release, error) {
-	releases, err := h.fetchReleases()
+func (h *HTTPRepository) GetLatestRelease(ctx context.Context) (*Release, error) {
+	releases, err := h.fetchReleases(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -118,39 +119,20 @@ func (h *HTTPRepository) GetLatestRelease() (*Release, error) {
 	return h.convertHTTPRelease(latestRelease)
 }
 
-// GetRelease returns a specific release by version
-func (h *HTTPRepository) GetRelease(version string) (*Release, error) {
-	releases, err := h.fetchReleases()
-	if err != nil {
-		return nil, err
-	}
-
-	h.debugLog("Looking for release version: %s", version)
-
-	for i := range releases {
-		if releases[i].Version == version {
-			h.debugLog("Found matching release: %s", version)
-			return h.convertHTTPRelease(&releases[i])
-		}
-	}
-
-	return nil, fmt.Errorf("release version %s not found", version)
-}
-
 // CompareVersions compares current version with latest
 func (h *HTTPRepository) CompareVersions(current, latest string) (bool, error) {
 	return version.IsNewer(latest, current)
 }
 
 // Download downloads a release to the specified destination
-func (h *HTTPRepository) Download(release *Release, dest string) error {
+func (h *HTTPRepository) Download(ctx context.Context, release *Release, dest string) error {
 	if release.DownloadURL == "" {
 		return fmt.Errorf("no download URL in release")
 	}
 
 	h.debugLog("Downloading from URL: %s to %s", release.DownloadURL, dest)
 
-	req, err := http.NewRequest("GET", release.DownloadURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, release.DownloadURL, nil)
 	if err != nil {
 		return fmt.Errorf("error creating download request: %w", err)
 	}

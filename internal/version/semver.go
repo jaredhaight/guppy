@@ -126,21 +126,6 @@ func (v *Version) Compare(other *Version) int {
 	return 0
 }
 
-// IsNewer returns true if v is newer than other
-func (v *Version) IsNewer(other *Version) bool {
-	return v.Compare(other) > 0
-}
-
-// IsOlder returns true if v is older than other
-func (v *Version) IsOlder(other *Version) bool {
-	return v.Compare(other) < 0
-}
-
-// Equals returns true if v equals other
-func (v *Version) Equals(other *Version) bool {
-	return v.Compare(other) == 0
-}
-
 // CompareStrings compares two version strings
 func CompareStrings(v1, v2 string) (int, error) {
 	ver1, err := Parse(v1)

@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/jaredhaight/guppy/pkg/applier"
+	"github.com/jaredhaight/guppy/internal/applier"
 )
 
 // ResolveBin locates a bin entry inside an app's install directory.

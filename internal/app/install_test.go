@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -153,7 +154,7 @@ func TestInstallArchiveEndToEnd(t *testing.T) {
 	})
 
 	var out bytes.Buffer
-	if err := installer(t, a, &out).Install(a); err != nil {
+	if err := installer(t, a, &out).Install(context.Background(), a); err != nil {
 		t.Fatalf("Install() error: %v\noutput:\n%s", err, out.String())
 	}
 
@@ -198,7 +199,7 @@ func TestInstallArchiveEndToEnd(t *testing.T) {
 	}
 
 	out.Reset()
-	if err := installer(t, reloaded, &out).Install(reloaded); err != nil {
+	if err := installer(t, reloaded, &out).Install(context.Background(), reloaded); err != nil {
 		t.Fatalf("second Install() error: %v", err)
 	}
 	if !strings.Contains(out.String(), "up to date") {
@@ -227,7 +228,7 @@ func TestInstallUpgradeReplacesOldVersion(t *testing.T) {
 	})
 
 	var out bytes.Buffer
-	if err := installer(t, a, &out).Install(a); err != nil {
+	if err := installer(t, a, &out).Install(context.Background(), a); err != nil {
 		t.Fatalf("Install() error: %v", err)
 	}
 
@@ -267,7 +268,7 @@ func TestInstallPreInstallFailureAborts(t *testing.T) {
 	})
 
 	var out bytes.Buffer
-	err := installer(t, a, &out).Install(a)
+	err := installer(t, a, &out).Install(context.Background(), a)
 	if err == nil {
 		t.Fatal("Install() succeeded, want the pre_install failure to abort it")
 	}
@@ -307,7 +308,7 @@ func TestInstallPostInstallFailureKeepsInstall(t *testing.T) {
 	})
 
 	var out bytes.Buffer
-	err := installer(t, a, &out).Install(a)
+	err := installer(t, a, &out).Install(context.Background(), a)
 	if err == nil {
 		t.Fatal("Install() succeeded, want the post_install failure reported")
 	}
@@ -349,7 +350,7 @@ func TestInstallRejectsBadChecksum(t *testing.T) {
 	})
 
 	var out bytes.Buffer
-	err := installer(t, a, &out).Install(a)
+	err := installer(t, a, &out).Install(context.Background(), a)
 	if err == nil {
 		t.Fatal("Install() succeeded on a bad checksum, want an error")
 	}
@@ -393,7 +394,7 @@ func TestInstallRefusesReleaseWithoutChecksum(t *testing.T) {
 	})
 
 	var out bytes.Buffer
-	err := installer(t, a, &out).Install(a)
+	err := installer(t, a, &out).Install(context.Background(), a)
 	if err == nil {
 		t.Fatal("Install() succeeded on a release with no checksum, want an error")
 	}
@@ -419,7 +420,7 @@ func TestInstallAllowUnverifiedWarnsOnStdout(t *testing.T) {
 	})
 
 	var out bytes.Buffer
-	if err := installer(t, a, &out).Install(a); err != nil {
+	if err := installer(t, a, &out).Install(context.Background(), a); err != nil {
 		t.Fatalf("Install() with allow_unverified error: %v", err)
 	}
 	if !strings.Contains(out.String(), "unverified") {
@@ -449,7 +450,7 @@ func TestInstallRejectsInsecureArtifactURL(t *testing.T) {
 	})
 
 	var out bytes.Buffer
-	err := installer(t, a, &out).Install(a)
+	err := installer(t, a, &out).Install(context.Background(), a)
 	if err == nil {
 		t.Fatal("Install() accepted a plain-http artifact URL, want an error")
 	}
@@ -471,7 +472,7 @@ func TestInstallAcceptsHTTPProviderChecksum(t *testing.T) {
 	})
 
 	var out bytes.Buffer
-	if err := installer(t, a, &out).Install(a); err != nil {
+	if err := installer(t, a, &out).Install(context.Background(), a); err != nil {
 		t.Fatalf("Install() error: %v", err)
 	}
 	if !strings.Contains(out.String(), "checksum verified") {
@@ -499,7 +500,7 @@ func TestInstallBinaryApplier(t *testing.T) {
 	})
 
 	var out bytes.Buffer
-	if err := installer(t, a, &out).Install(a); err != nil {
+	if err := installer(t, a, &out).Install(context.Background(), a); err != nil {
 		t.Fatalf("Install() error: %v", err)
 	}
 
@@ -546,7 +547,7 @@ func TestCheck(t *testing.T) {
 			a.CurrentVersion = tt.current
 
 			var out bytes.Buffer
-			if err := installer(t, a, &out).Check(a); err != nil {
+			if err := installer(t, a, &out).Check(context.Background(), a); err != nil {
 				t.Fatalf("Check() error: %v", err)
 			}
 			if !strings.Contains(out.String(), tt.want) {
@@ -574,7 +575,7 @@ func TestRemove(t *testing.T) {
 	})
 
 	var out bytes.Buffer
-	if err := installer(t, a, &out).Install(a); err != nil {
+	if err := installer(t, a, &out).Install(context.Background(), a); err != nil {
 		t.Fatalf("Install() error: %v", err)
 	}
 

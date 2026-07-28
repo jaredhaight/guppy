@@ -2,16 +2,17 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 
+	"github.com/jaredhaight/guppy/internal/applier"
+	"github.com/jaredhaight/guppy/internal/checksum"
 	"github.com/jaredhaight/guppy/internal/config"
 	"github.com/jaredhaight/guppy/internal/hook"
-	"github.com/jaredhaight/guppy/pkg/applier"
-	"github.com/jaredhaight/guppy/pkg/checksum"
-	"github.com/jaredhaight/guppy/pkg/repository"
+	"github.com/jaredhaight/guppy/internal/repository"
 )
 
 // Installer runs the install pipeline for a single app.
@@ -58,8 +59,8 @@ func NewRepository(a *config.App, debug bool) (repository.Repository, error) {
 }
 
 // Check reports whether a newer release is available without installing it.
-func (i *Installer) Check(a *config.App) error {
-	latest, err := i.Repo.GetLatestRelease()
+func (i *Installer) Check(ctx context.Context, a *config.App) error {
+	latest, err := i.Repo.GetLatestRelease(ctx)
 	if err != nil {
 		return fmt.Errorf("error getting latest release: %w", err)
 	}
@@ -88,8 +89,8 @@ func (i *Installer) Check(a *config.App) error {
 // The order is deliberate: download and verify before running any hook, so a
 // network failure never leaves a pre_install hook's side effects (a stopped
 // service, a drained queue) behind with nothing installed.
-func (i *Installer) Install(a *config.App) error {
-	latest, err := i.Repo.GetLatestRelease()
+func (i *Installer) Install(ctx context.Context, a *config.App) error {
+	latest, err := i.Repo.GetLatestRelease(ctx)
 	if err != nil {
 		return fmt.Errorf("error getting latest release: %w", err)
 	}
@@ -139,7 +140,7 @@ func (i *Installer) Install(a *config.App) error {
 	}
 	downloadPath := filepath.Join(downloadDir, latest.FileName)
 	i.debugf("Computed download path: %s", downloadPath)
-	if err := i.Repo.Download(latest, downloadPath); err != nil {
+	if err := i.Repo.Download(ctx, latest, downloadPath); err != nil {
 		return fmt.Errorf("error downloading release: %w", err)
 	}
 	defer func() { _ = os.Remove(downloadPath) }()

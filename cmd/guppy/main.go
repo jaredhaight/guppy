@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/signal"
@@ -24,7 +25,21 @@ var (
 )
 
 func main() {
-	if err := rootCmd.Execute(); err != nil {
+	// One signal handler for the whole program. Cancelling the context is
+	// what makes Ctrl-C interrupt an in-flight download rather than waiting
+	// out the HTTP timeout.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+
+	// stop() restores the default disposition, so a second Ctrl-C kills the
+	// process outright. Without it an unresponsive transfer would be
+	// uninterruptible after the first signal.
+	go func() {
+		<-ctx.Done()
+		stop()
+	}()
+	defer stop()
+
+	if err := rootCmd.ExecuteContext(ctx); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
@@ -50,7 +65,7 @@ With no arguments it updates every configured app.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// If no interval flag is set, run once
 		if intervalFlag == "" {
-			return updateApps(args)
+			return updateApps(cmd.Context(), args)
 		}
 
 		interval, err := util.ParseInterval(intervalFlag)
@@ -58,31 +73,35 @@ With no arguments it updates every configured app.`,
 			return fmt.Errorf("invalid interval: %w", err)
 		}
 
-		// Set up signal handling for graceful shutdown
-		sigChan := make(chan os.Signal, 1)
-		signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+		// Already cancelled on SIGINT/SIGTERM by main, so waiting on it both
+		// ends the loop and aborts whatever download is in flight.
+		ctx := cmd.Context()
 
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 
 		fmt.Printf("Starting update monitoring (checking every %s). Press Ctrl+C to stop.\n", interval)
 
-		if err := updateApps(args); err != nil {
-			fmt.Printf("Error during update check: %v\n", err)
-			fmt.Println("Will retry at next interval...")
+		runOnce := func() {
+			if err := updateApps(ctx, args); err != nil {
+				if ctx.Err() != nil {
+					return // shutting down; the error is the cancellation
+				}
+				fmt.Printf("Error during update check: %v\n", err)
+				fmt.Println("Will retry at next interval...")
+			}
 		}
+
+		runOnce()
 
 		for {
 			select {
-			case <-sigChan:
+			case <-ctx.Done():
 				fmt.Println("\nReceived shutdown signal, stopping...")
 				return nil
 			case <-ticker.C:
 				fmt.Printf("\n[%s] Running scheduled update check...\n", time.Now().Format("2006-01-02 15:04:05"))
-				if err := updateApps(args); err != nil {
-					fmt.Printf("Error during update check: %v\n", err)
-					fmt.Println("Will retry at next interval...")
-				}
+				runOnce()
 			}
 		}
 	},
@@ -103,7 +122,7 @@ var checkCmd = &cobra.Command{
 			if err != nil {
 				return err
 			}
-			return installer.Check(a)
+			return installer.Check(cmd.Context(), a)
 		})
 	},
 }
@@ -413,7 +432,7 @@ func newInstaller(a *config.App) (*app.Installer, error) {
 	return &app.Installer{Repo: repo, Debug: debug}, nil
 }
 
-func updateApps(args []string) error {
+func updateApps(ctx context.Context, args []string) error {
 	apps, err := resolveApps(args)
 	if err != nil {
 		return err
@@ -424,7 +443,7 @@ func updateApps(args []string) error {
 		if err != nil {
 			return err
 		}
-		return installer.Install(a)
+		return installer.Install(ctx, a)
 	})
 }
 
