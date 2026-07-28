@@ -1,0 +1,73 @@
+name: Tag
+
+# Every merge to main that changes what users actually run becomes a release.
+#
+# Guppy is consumed by an auto-updater: a tag is not a bookkeeping entry, it is
+# an ~8 MB download for every installed guppy on its next check. So the trigger
+# is gated to the things that change the artifact — Go code and the install
+# scripts. Docs, workflows, examples and tests merge without shipping anything.
+on:
+  push:
+    branches:
+      - main
+    paths:
+      # Order matters: the negation only subtracts from what the pattern above
+      # it already matched. Moving '!**_test.go' above '**.go' silently turns
+      # it back on.
+      - '**.go'
+      - '!**_test.go'
+      - 'go.mod'
+      - 'go.sum'
+      - 'install.sh'
+      - 'install.ps1'
+
+# Two merges landing together would otherwise both read the same highest tag
+# and compute the same version.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  version:
+    name: Compute version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.next.outputs.version }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The counter is derived from the tags, so they all have to be here.
+          fetch-depth: 0
+          fetch-tags: true
+
+      # vYYYY.MMDD.N, matching the tags already published. N is a global
+      # counter, not a per-day one: v2025.1107.18, v2025.1110.19, v2026.0728.22.
+      - name: Next version
+        id: next
+        run: |
+          n=$(git tag --list 'v*' \
+            | grep -E '^v[0-9]{4}\.[0-9]{4}\.[0-9]+$' \
+            | awk -F. '{print $NF}' \
+            | sort -n | tail -1)
+          version="v$(date -u +%Y.%m%d).$((${n:-0} + 1))"
+          echo "Next version: ${version}"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+  # The tag itself is created by the release, not pushed from here. A tag
+  # pushed with GITHUB_TOKEN does not trigger other workflows, so pushing one
+  # would leave the release job sitting idle waiting for an event that never
+  # arrives. Calling the workflow directly sidesteps that, and needs no PAT.
+  release:
+    name: Release
+    needs: version
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    uses: ./.github/workflows/release.yml
+    with:
+      version: ${{ needs.version.outputs.version }}

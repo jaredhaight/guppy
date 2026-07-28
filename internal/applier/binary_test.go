@@ -453,3 +453,28 @@ func TestBinaryApplier_Apply_PermissionError_SourceUnreadable(t *testing.T) {
 		t.Error("Target file should not exist after failed Apply()")
 	}
 }
+
+func TestReplace(t *testing.T) {
+	tempDir := t.TempDir()
+
+	// Missing path is a no-op.
+	missing := filepath.Join(tempDir, "missing.bin")
+	if err := Replace(missing); err != nil {
+		t.Errorf("Replace() on a missing path: %v", err)
+	}
+
+	// An existing file is cleared out of the way.
+	existing := filepath.Join(tempDir, "existing.bin")
+	if err := os.WriteFile(existing, []byte("old"), 0755); err != nil {
+		t.Fatalf("Failed to create file: %v", err)
+	}
+	if err := Replace(existing); err != nil {
+		t.Fatalf("Replace() failed: %v", err)
+	}
+	if _, err := os.Stat(existing); !os.IsNotExist(err) {
+		t.Error("Replace() left the file in place")
+	}
+
+	// The rename-aside fallback only runs where a file can't be deleted, which
+	// is Windows and a running executable. Nothing portable triggers it here.
+}

@@ -1,16 +1,29 @@
 name: Release
 
-# Tag-driven, not push-to-main. A release is a deliberate act with a
-# reviewable tag -> artifact mapping; building one on every merge means
-# nobody can say which commit a given binary came from without digging
-# through run numbers.
+# Three ways in, one version. Normally tag.yml calls this on a merge to main
+# that touched Go code or an install script, and passes the version it
+# computed; the release creates the tag. A tag pushed by hand still works:
 #
-#   git tag -a v1.4.0 -m 'v1.4.0' && git push origin v1.4.0
+#   git tag -a v2026.0728.23 -m 'v2026.0728.23' && git push origin v2026.0728.23
+#
+# Either way the tag -> artifact mapping stays reviewable, because the version
+# is always an explicit input or the ref itself, never a run number.
 on:
   push:
     tags:
       - 'v*'
+  workflow_call:
+    inputs:
+      version:
+        description: 'Version to release, e.g. v2026.0728.23'
+        required: true
+        type: string
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release, e.g. v2026.0728.23'
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -59,7 +72,25 @@ jobs:
 
       - name: Get version
         id: get_version
-        run: echo "VERSION=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+        env:
+          # Empty on a tag push, where the ref is the version.
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          VERSION="${INPUT_VERSION:-$GITHUB_REF_NAME}"
+
+          # workflow_dispatch used to take no input, so running it from a
+          # branch built with VERSION=main and published a release tagged
+          # "main". That becomes 'latest', and every installed guppy then
+          # fails parsing it as a version. Refuse anything shaped wrong.
+          case "$VERSION" in
+            v[0-9]*.[0-9]*.[0-9]*) ;;
+            *)
+              echo "refusing to release ${VERSION}: expected vYYYY.MMDD.N" >&2
+              exit 1
+              ;;
+          esac
+
+          echo "VERSION=${VERSION}" >> "$GITHUB_OUTPUT"
 
       - name: Build
         env:
@@ -108,11 +139,32 @@ jobs:
         run: |
           mkdir -p release
           find artifacts -type f -exec cp {} release/ \;
+          # Shipped as release assets so the install one-liner points at a
+          # tagged, checksummed script rather than whatever is on main.
+          cp install.sh install.ps1 release/
           ls -lh release/
 
       - name: Get version
         id: get_version
-        run: echo "VERSION=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+        env:
+          # Empty on a tag push, where the ref is the version.
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          VERSION="${INPUT_VERSION:-$GITHUB_REF_NAME}"
+
+          # workflow_dispatch used to take no input, so running it from a
+          # branch built with VERSION=main and published a release tagged
+          # "main". That becomes 'latest', and every installed guppy then
+          # fails parsing it as a version. Refuse anything shaped wrong.
+          case "$VERSION" in
+            v[0-9]*.[0-9]*.[0-9]*) ;;
+            *)
+              echo "refusing to release ${VERSION}: expected vYYYY.MMDD.N" >&2
+              exit 1
+              ;;
+          esac
+
+          echo "VERSION=${VERSION}" >> "$GITHUB_OUTPUT"
 
       # checksums.txt only proves the files match themselves. It is signed by
       # nobody, and whoever can replace a binary can replace it too. Keep it
@@ -130,12 +182,18 @@ jobs:
       - name: Attest build provenance
         uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
-          subject-path: 'release/guppy-*'
+          subject-path: |
+            release/guppy-*
+            release/install.*
 
       - name: Create Release
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
+          # Creates the tag when it doesn't exist yet, which is the automatic
+          # path. Nothing loops: a tag created with GITHUB_TOKEN doesn't
+          # trigger the push-tags run above.
           tag_name: ${{ steps.get_version.outputs.VERSION }}
+          target_commitish: ${{ github.sha }}
           name: Release ${{ steps.get_version.outputs.VERSION }}
           files: release/*
           draft: false
