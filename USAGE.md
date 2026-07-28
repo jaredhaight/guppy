@@ -26,7 +26,7 @@ cd guppy
 go build -o guppy ./cmd/guppy
 ```
 
-Neither of those leaves guppy managing itself. To get that, run `guppy install jaredhaight/guppy --asset <the asset for your platform>` — which is all the install script does once it has a binary to work with.
+Neither of those leaves guppy managing itself. To get that, run `guppy add jaredhaight/guppy --asset <the asset for your platform>` and then `guppy install guppy` — which is all the install script does once it has a binary to work with.
 
 ### Verifying a downloaded release
 
@@ -80,23 +80,13 @@ Running `guppy` on its own prints help. The three commands that do the work are 
 
 ### guppy install
 
-Installs one app, named either as `owner/repo` or as an app you've already added.
-
-Given `owner/repo`, guppy writes the config and installs it in a single step:
-
-```bash
-guppy install BurntSushi/ripgrep --applier archive --bin rg
-```
-
-Given the name of an app you've already added, it just installs it:
+Installs one app you've already [added](#guppy-add), named as guppy knows it:
 
 ```bash
 guppy install ripgrep
 ```
 
-It takes the same flags as [`guppy add`](#guppy-add), which describe the app being added — so they only make sense with the `owner/repo` form.
-
-If the app already has a config, `install` says so rather than overwriting it, and points you at `guppy update`.
+It takes no app-describing flags — an app is described once, in its config, by `guppy add` or by editing the file. Given `owner/repo`, `install` says to run `guppy add` first rather than guessing.
 
 ### guppy update [app...]
 
@@ -146,7 +136,7 @@ zoxide: 0.9.6 available (not installed)
 
 ### guppy add
 
-Starts managing an app, without downloading anything. Use this when you want to edit the config before the first install; otherwise `guppy install` does both at once.
+Starts managing an app, without downloading anything. Every app starts here; `guppy install <app>` then installs it, and you can edit the config in between.
 
 ```bash
 guppy add BurntSushi/ripgrep --applier archive --bin rg
@@ -354,12 +344,6 @@ Because these are shell commands from your own config file, treat an app config 
 This is what the [install script](#installation) runs, so guppy is usually already set up this way:
 
 ```bash
-guppy install jaredhaight/guppy --asset guppy-linux-amd64
-```
-
-Or in two steps, if you want to look over the config before anything is downloaded:
-
-```bash
 guppy add jaredhaight/guppy --asset guppy-linux-amd64
 ```
 
@@ -370,7 +354,11 @@ guppy install guppy
 ### Example 2: An archive with a nested binary
 
 ```bash
-guppy install BurntSushi/ripgrep --applier archive --bin rg --asset 'x86_64-unknown-linux-musl\.tar\.gz$'
+guppy add BurntSushi/ripgrep --applier archive --bin rg --asset 'x86_64-unknown-linux-musl\.tar\.gz$'
+```
+
+```bash
+guppy install ripgrep
 ```
 
 ### Example 3: A private repository

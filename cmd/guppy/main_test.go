@@ -508,110 +508,21 @@ func TestRootRejectsIntervalFlag(t *testing.T) {
 	}
 }
 
-// installTarget is the part of install that decides what to install, and
-// whether it has to be added first. Exercised directly so the tests stay off
-// the network.
-func newInstallTarget() (*cli, *addFlags, *cobra.Command) {
-	f := &addFlags{}
-	cmd := &cobra.Command{Use: "install"}
-	cmd.SetOut(io.Discard)
-	f.register(cmd)
-	return &cli{}, f, cmd
-}
-
-func TestInstallTargetAddsRepo(t *testing.T) {
+// install only takes apps guppy manages, so owner/repo has to point at add
+// rather than fail with "no app named BurntSushi/ripgrep".
+func TestInstallRejectsOwnerRepo(t *testing.T) {
 	testRoot(t)
 
-	c, f, cmd := newInstallTarget()
-	if err := cmd.Flags().Set("bin", "rg"); err != nil {
-		t.Fatalf("failed to set --bin: %v", err)
+	_, err := run(t, "install", "BurntSushi/ripgrep")
+	if err == nil {
+		t.Fatal("install accepted an owner/repo argument")
 	}
-
-	name, err := c.installTarget(cmd, f, "BurntSushi/ripgrep")
-	if err != nil {
-		t.Fatalf("installTarget() error: %v", err)
-	}
-	if name != "ripgrep" {
-		t.Errorf("installTarget() = %q, want the repo name", name)
-	}
-
-	a, err := config.LoadApp("ripgrep")
-	if err != nil {
-		t.Fatalf("installTarget() did not write a config: %v", err)
-	}
-	if a.Repository.Owner != "BurntSushi" || len(a.Bin) != 1 || a.Bin[0] != "rg" {
-		t.Errorf("config = %+v, want the flags applied", a)
+	if !strings.Contains(err.Error(), "guppy add BurntSushi/ripgrep") {
+		t.Errorf("error = %v, want it to point at add", err)
 	}
 }
 
-func TestInstallTargetPassesThroughAppName(t *testing.T) {
-	testRoot(t)
-
-	if _, err := run(t, "add", "owner/repo"); err != nil {
-		t.Fatalf("add error: %v", err)
-	}
-
-	c, f, cmd := newInstallTarget()
-	name, err := c.installTarget(cmd, f, "repo")
-	if err != nil {
-		t.Fatalf("installTarget() error: %v", err)
-	}
-	if name != "repo" {
-		t.Errorf("installTarget() = %q, want the name unchanged", name)
-	}
-}
-
-func TestInstallTargetErrors(t *testing.T) {
-	tests := []struct {
-		name    string
-		arg     string
-		setFlag bool
-		want    string
-	}{
-		{
-			name: "repo guppy already manages",
-			arg:  "owner/repo",
-			want: "guppy update repo",
-		},
-		{
-			name:    "app flags given with an app name",
-			arg:     "repo",
-			setFlag: true,
-			want:    "already has a config",
-		},
-		{
-			name: "malformed repo spec",
-			arg:  "owner/",
-			want: "expected owner/repo",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			testRoot(t)
-			if _, err := run(t, "add", "owner/repo"); err != nil {
-				t.Fatalf("add error: %v", err)
-			}
-
-			c, f, cmd := newInstallTarget()
-			if tt.setFlag {
-				if err := cmd.Flags().Set("applier", "archive"); err != nil {
-					t.Fatalf("failed to set --applier: %v", err)
-				}
-			}
-
-			_, err := c.installTarget(cmd, f, tt.arg)
-			if err == nil {
-				t.Fatalf("installTarget(%q) succeeded, want an error", tt.arg)
-			}
-			if !strings.Contains(err.Error(), tt.want) {
-				t.Errorf("error = %v, want it to mention %q", err, tt.want)
-			}
-		})
-	}
-}
-
-// The split between install and update invites this, so it gets a real answer.
+// Same split, same answer, from the other side.
 func TestUpdateRejectsOwnerRepo(t *testing.T) {
 	testRoot(t)
 
@@ -619,8 +530,8 @@ func TestUpdateRejectsOwnerRepo(t *testing.T) {
 	if err == nil {
 		t.Fatal("update accepted an owner/repo argument")
 	}
-	if !strings.Contains(err.Error(), "guppy install") {
-		t.Errorf("error = %v, want it to point at install", err)
+	if !strings.Contains(err.Error(), "guppy add") {
+		t.Errorf("error = %v, want it to point at add", err)
 	}
 }
 
