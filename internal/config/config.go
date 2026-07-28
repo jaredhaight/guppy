@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/jaredhaight/guppy/pkg/repository"
 	"github.com/spf13/viper"
 	"gopkg.in/yaml.v3"
 )
@@ -33,6 +34,12 @@ type App struct {
 	// download is applied.
 	PreInstall  []string `json:"pre_install,omitempty" yaml:"pre_install,omitempty" mapstructure:"pre_install"`
 	PostInstall []string `json:"post_install,omitempty" yaml:"post_install,omitempty" mapstructure:"post_install"`
+
+	// AllowUnverified drops guppy's integrity requirements for this app: it
+	// permits plain-HTTP URLs and releases that ship no checksum. Both mean
+	// guppy cannot tell a genuine release from a substituted one, so this is
+	// opt-in per app and never a default.
+	AllowUnverified bool `json:"allow_unverified,omitempty" yaml:"allow_unverified,omitempty" mapstructure:"allow_unverified"`
 
 	name string // from the filename
 	path string // where it was loaded from, so Save round-trips the same format
@@ -208,6 +215,11 @@ func (a *App) Validate() error {
 		if a.Repository.URL == "" {
 			return fmt.Errorf("repository url is required for HTTP")
 		}
+		if !a.AllowUnverified {
+			if err := repository.ValidateURL(a.Repository.URL); err != nil {
+				return err
+			}
+		}
 	}
 
 	if a.Applier == "" {
@@ -263,12 +275,19 @@ func (a *App) Save() error {
 		return fmt.Errorf("error encoding config: %w", err)
 	}
 
-	if err := os.MkdirAll(filepath.Dir(a.path), 0755); err != nil {
+	// Owner-only: these files hold repository.token, a GitHub PAT.
+	if err := os.MkdirAll(filepath.Dir(a.path), 0700); err != nil {
 		return fmt.Errorf("error creating config directory: %w", err)
 	}
 
-	if err := os.WriteFile(a.path, data, 0644); err != nil {
+	if err := os.WriteFile(a.path, data, 0600); err != nil {
 		return fmt.Errorf("error writing config file: %w", err)
+	}
+
+	// WriteFile only applies the mode when it creates the file, so configs
+	// written by an older guppy would keep their 0644 forever without this.
+	if err := os.Chmod(a.path, 0600); err != nil {
+		return fmt.Errorf("error securing config file: %w", err)
 	}
 
 	return nil

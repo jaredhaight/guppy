@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/jaredhaight/guppy/pkg/applier"
 )
 
 // ResolveBin locates a bin entry inside an app's install directory.
@@ -24,7 +26,7 @@ func ResolveBin(installDir, entry string) (string, error) {
 
 	// Exact relative path.
 	exact := filepath.Join(installDir, entry)
-	if within(installDir, exact) {
+	if applier.Within(installDir, exact) {
 		if info, err := os.Stat(exact); err == nil && info.Mode().IsRegular() {
 			return exact, nil
 		}
@@ -99,11 +101,6 @@ func UnlinkBins(binDir string, names []string) error {
 		}
 	}
 	return nil
-}
-
-// within reports whether path is inside dir.
-func within(dir, path string) bool {
-	return path == dir || strings.HasPrefix(filepath.Clean(path), dir+string(os.PathSeparator))
 }
 
 func copyFile(source, dest string) error {

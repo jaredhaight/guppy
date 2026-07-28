@@ -363,6 +363,101 @@ func TestInstallRejectsBadChecksum(t *testing.T) {
 	}
 }
 
+// unverifiedServer serves a feed whose single release carries no checksum at
+// all, the case where guppy has no way to tell a real artifact from a swapped
+// one.
+func unverifiedServer(t *testing.T, payload []byte) *httptest.Server {
+	t.Helper()
+
+	mux := http.NewServeMux()
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+
+	mux.HandleFunc("/app-1.0.0.tar.gz", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(payload)
+	})
+	mux.HandleFunc("/releases.json", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, `[{"version":"1.0.0","url":"%s/app-1.0.0.tar.gz"}]`, server.URL)
+	})
+	return server
+}
+
+// A release with no checksum is unverifiable, so guppy refuses it rather than
+// installing something it cannot vouch for onto the user's PATH.
+func TestInstallRefusesReleaseWithoutChecksum(t *testing.T) {
+	testRoot(t)
+
+	server := unverifiedServer(t, tarGz(t, map[string]string{"app-1.0.0/app": "v1"}))
+	a := newApp(t, "app", server.URL+"/releases.json", func(a *config.App) {
+		a.Bin = []string{"app"}
+	})
+
+	var out bytes.Buffer
+	err := installer(t, a, &out).Install(a)
+	if err == nil {
+		t.Fatal("Install() succeeded on a release with no checksum, want an error")
+	}
+	if !strings.Contains(err.Error(), "allow_unverified") {
+		t.Errorf("Install() error = %v, want it to name the allow_unverified override", err)
+	}
+
+	installDir, _ := config.InstallDir("app")
+	if entries, err := os.ReadDir(installDir); err == nil && len(entries) > 0 {
+		t.Error("an unverifiable release was still installed")
+	}
+}
+
+// The override exists, but it has to be loud: a warning only visible under
+// --debug is not a warning.
+func TestInstallAllowUnverifiedWarnsOnStdout(t *testing.T) {
+	testRoot(t)
+
+	server := unverifiedServer(t, tarGz(t, map[string]string{"app-1.0.0/app": "v1"}))
+	a := newApp(t, "app", server.URL+"/releases.json", func(a *config.App) {
+		a.Bin = []string{"app"}
+		a.AllowUnverified = true
+	})
+
+	var out bytes.Buffer
+	if err := installer(t, a, &out).Install(a); err != nil {
+		t.Fatalf("Install() with allow_unverified error: %v", err)
+	}
+	if !strings.Contains(out.String(), "unverified") {
+		t.Errorf("output = %q, want a visible unverified warning", out.String())
+	}
+	if a.CurrentVersion != "1.0.0" {
+		t.Errorf("CurrentVersion = %q, want the install to have completed", a.CurrentVersion)
+	}
+}
+
+// The feed names its own artifact URL, so an https feed can still hand back a
+// plain-http artifact. That has to be caught too.
+func TestInstallRejectsInsecureArtifactURL(t *testing.T) {
+	testRoot(t)
+
+	mux := http.NewServeMux()
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+
+	mux.HandleFunc("/releases.json", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, `[{"version":"1.0.0","url":"http://example.com/app.tar.gz","sha256":"%s"}]`,
+			strings.Repeat("a", 64))
+	})
+
+	a := newApp(t, "app", server.URL+"/releases.json", func(a *config.App) {
+		a.Bin = []string{"app"}
+	})
+
+	var out bytes.Buffer
+	err := installer(t, a, &out).Install(a)
+	if err == nil {
+		t.Fatal("Install() accepted a plain-http artifact URL, want an error")
+	}
+	if !strings.Contains(err.Error(), "insecure") {
+		t.Errorf("Install() error = %v, want it to flag the insecure URL", err)
+	}
+}
+
 // The HTTP provider emits "sha256:hex" checksums. Before consolidation those
 // reached a bare-hex comparison and every such release failed verification.
 func TestInstallAcceptsHTTPProviderChecksum(t *testing.T) {

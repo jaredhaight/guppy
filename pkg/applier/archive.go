@@ -6,10 +6,19 @@ import (
 	"compress/gzip"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 )
+
+// MaxExtractBytes caps the total uncompressed size of an archive.
+//
+// An archive is attacker-supplied and compresses well: a few hundred KB of
+// gzip expands to gigabytes of zeros. Nothing checks the size before
+// extraction because nothing knows it, so the extractor keeps its own count
+// and stops.
+const MaxExtractBytes = 2 << 30 // 2 GiB
 
 // ArchiveApplier applies updates by extracting archives
 type ArchiveApplier struct {
@@ -18,9 +27,35 @@ type ArchiveApplier struct {
 	ExtractPath string
 }
 
-// NewArchiveApplier creates a new archive applier
-func NewArchiveApplier() *ArchiveApplier {
-	return &ArchiveApplier{}
+// Within reports whether path is inside dir. Both are cleaned first, so a
+// "../" that resolves back inside is accepted and one that escapes is not.
+func Within(dir, path string) bool {
+	dir = filepath.Clean(dir)
+	path = filepath.Clean(path)
+	return path == dir || strings.HasPrefix(path, dir+string(os.PathSeparator))
+}
+
+// safeMode reduces an archive-supplied mode to one of two values.
+//
+// The mode in an archive is chosen by whoever built it. Honoring it verbatim
+// lets a release ship a setuid or world-writable file — Go's zip reader maps
+// the setuid bit into fs.FileMode, and os.OpenFile passes it through to the
+// syscall. Only the executable bit is worth carrying over.
+func safeMode(mode fs.FileMode) fs.FileMode {
+	if mode.Perm()&0111 != 0 {
+		return 0755
+	}
+	return 0644
+}
+
+// entryPath resolves an archive entry name against dest, rejecting anything
+// that would land outside it.
+func entryPath(dest, name string) (string, error) {
+	path := filepath.Join(dest, name)
+	if !Within(dest, path) {
+		return "", fmt.Errorf("illegal file path in archive: %s", name)
+	}
+	return path, nil
 }
 
 // Apply extracts an archive to the target location
@@ -49,18 +84,24 @@ func (a *ArchiveApplier) extractZip(source string, dest string) error {
 	}
 	defer func() { _ = reader.Close() }()
 
+	var written int64
 	for _, file := range reader.File {
-		path := filepath.Join(dest, file.Name)
-
-		// Check for ZipSlip vulnerability
-		if !strings.HasPrefix(path, filepath.Clean(dest)+string(os.PathSeparator)) {
-			return fmt.Errorf("illegal file path: %s", path)
+		path, err := entryPath(dest, file.Name)
+		if err != nil {
+			return err
 		}
 
 		if file.FileInfo().IsDir() {
-			if err := os.MkdirAll(path, file.Mode()); err != nil {
+			if err := os.MkdirAll(path, 0755); err != nil {
 				return fmt.Errorf("error creating directory: %w", err)
 			}
+			continue
+		}
+
+		// Symlinks, devices and fifos are skipped, matching the tar path. A
+		// zip symlink stores its target as the entry's content, so honoring
+		// one would reintroduce the escape the path check above prevents.
+		if !file.Mode().IsRegular() {
 			continue
 		}
 
@@ -69,35 +110,36 @@ func (a *ArchiveApplier) extractZip(source string, dest string) error {
 			return fmt.Errorf("error creating parent directory: %w", err)
 		}
 
-		// Extract file
-		if err := a.extractZipFile(file, path); err != nil {
+		n, err := a.extractZipFile(file, path, MaxExtractBytes-written)
+		if err != nil {
 			return err
 		}
+		written += n
 	}
 
 	return nil
 }
 
 // extractZipFile extracts a single file from a zip archive
-func (a *ArchiveApplier) extractZipFile(file *zip.File, dest string) error {
+func (a *ArchiveApplier) extractZipFile(file *zip.File, dest string, remaining int64) (int64, error) {
 	rc, err := file.Open()
 	if err != nil {
-		return fmt.Errorf("error opening file in archive: %w", err)
+		return 0, fmt.Errorf("error opening file in archive: %w", err)
 	}
 	defer func() { _ = rc.Close() }()
 
-	outFile, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, file.Mode())
+	outFile, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, safeMode(file.Mode()))
 	if err != nil {
-		return fmt.Errorf("error creating output file: %w", err)
+		return 0, fmt.Errorf("error creating output file: %w", err)
 	}
 	defer func() { _ = outFile.Close() }()
 
-	_, err = io.Copy(outFile, rc)
+	n, err := copyBounded(outFile, rc, remaining)
 	if err != nil {
-		return fmt.Errorf("error extracting file: %w", err)
+		return n, fmt.Errorf("error extracting %s: %w", file.Name, err)
 	}
 
-	return nil
+	return n, nil
 }
 
 // extractTarGz extracts a tar.gz archive
@@ -116,6 +158,7 @@ func (a *ArchiveApplier) extractTarGz(source string, dest string) error {
 
 	tarReader := tar.NewReader(gzipReader)
 
+	var written int64
 	for {
 		header, err := tarReader.Next()
 		if err == io.EOF {
@@ -125,16 +168,14 @@ func (a *ArchiveApplier) extractTarGz(source string, dest string) error {
 			return fmt.Errorf("error reading tar: %w", err)
 		}
 
-		path := filepath.Join(dest, header.Name)
-
-		// Check for path traversal
-		if !strings.HasPrefix(path, filepath.Clean(dest)+string(os.PathSeparator)) {
-			return fmt.Errorf("illegal file path: %s", path)
+		path, err := entryPath(dest, header.Name)
+		if err != nil {
+			return err
 		}
 
 		switch header.Typeflag {
 		case tar.TypeDir:
-			if err := os.MkdirAll(path, os.FileMode(header.Mode)); err != nil {
+			if err := os.MkdirAll(path, 0755); err != nil {
 				return fmt.Errorf("error creating directory: %w", err)
 			}
 		case tar.TypeReg:
@@ -143,23 +184,45 @@ func (a *ArchiveApplier) extractTarGz(source string, dest string) error {
 				return fmt.Errorf("error creating parent directory: %w", err)
 			}
 
-			outFile, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, os.FileMode(header.Mode))
+			outFile, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, safeMode(fs.FileMode(header.Mode)))
 			if err != nil {
 				return fmt.Errorf("error creating file: %w", err)
 			}
 
-			if _, err := io.Copy(outFile, tarReader); err != nil {
+			n, err := copyBounded(outFile, tarReader, MaxExtractBytes-written)
+			if err != nil {
 				_ = outFile.Close()
-				return fmt.Errorf("error extracting file: %w", err)
+				return fmt.Errorf("error extracting %s: %w", header.Name, err)
 			}
+			written += n
+
 			if err := outFile.Close(); err != nil {
 				return fmt.Errorf("error closing file: %w", err)
 			}
 		default:
-			// Skip other types (symlinks, etc.)
+			// Skip other types (symlinks, devices, etc.)
 			continue
 		}
 	}
 
 	return nil
+}
+
+// copyBounded copies src into dst, stopping short of remaining bytes.
+//
+// It reads one byte past the budget so "filled it exactly" is told apart from
+// "there was more", making an over-large archive an error instead of a
+// silently truncated install.
+func copyBounded(dst io.Writer, src io.Reader, remaining int64) (int64, error) {
+	if remaining < 0 {
+		remaining = 0
+	}
+	n, err := io.Copy(dst, io.LimitReader(src, remaining+1))
+	if err != nil {
+		return n, err
+	}
+	if n > remaining {
+		return n, fmt.Errorf("archive expands past the %d byte limit", MaxExtractBytes)
+	}
+	return n, nil
 }

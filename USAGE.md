@@ -243,6 +243,10 @@ Writing `bin: [rg]` finds that no matter what the version directory is called. I
 
 Binaries are linked, not copied, and guppy makes them executable — archives don't always record the executable bit.
 
+### allow_unverified
+
+Drops guppy's integrity requirements for this one app: plain-HTTP URLs are accepted, and so are releases that ship no checksum. Guppy warns on every unverified install. Defaults to `false`. See [Verification](#verification).
+
 ### pre_install and post_install
 
 Shell commands to run around the install. Each is a list, run in order, stopping at the first failure.
@@ -364,14 +368,32 @@ Restart=on-failure
 WantedBy=default.target
 ```
 
-## Checksum Verification
+## Verification
 
-Guppy verifies downloads whenever the release provides a checksum.
+Guppy installs binaries onto your `PATH`, so it refuses to install anything it can't verify.
 
 - **GitHub** supplies a SHA256 digest for release assets automatically.
 - **HTTP** feeds may include `md5`, `sha1` and/or `sha256`. Guppy uses the strongest one available (sha256 > sha1 > md5).
 
-A download that fails verification is deleted and the install stops. If a release carries no checksum at all, guppy installs it and notes this under `--debug`.
+Two requirements, both enforced before anything is downloaded:
+
+1. **URLs must be `https`.** This covers both the feed URL and the artifact URL the feed points at — they're set separately, so a secure feed can still hand back an insecure download. `localhost` and loopback addresses are exempt.
+2. **The release must carry a checksum.** A download that fails verification is deleted and the install stops.
+
+Both matter together rather than separately: over plain HTTP, anyone who can rewrite the download can rewrite the checksum alongside it, so verification proves nothing.
+
+### Overriding this
+
+If you're installing from a source that can't meet either requirement, set `allow_unverified` on that app:
+
+```yaml
+repository:
+  type: http
+  url: http://internal-host.lan/releases.json
+allow_unverified: true
+```
+
+Guppy will then install from plain-HTTP URLs and accept releases with no checksum, printing a warning each time it does. It's per app, never global — you're saying you trust that specific source, not switching the protection off.
 
 ## Supported Archive Formats
 

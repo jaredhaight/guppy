@@ -118,6 +118,20 @@ func (i *Installer) Install(a *config.App) error {
 		return err
 	}
 
+	// Decide whether this release is trustworthy *before* fetching it. The
+	// feed names its own artifact URL, independently of the URL the feed was
+	// served from, so a https feed can still hand back a http artifact.
+	if !a.AllowUnverified {
+		if err := repository.ValidateURL(latest.DownloadURL); err != nil {
+			return err
+		}
+		if latest.Checksum == "" {
+			return fmt.Errorf("%s %s ships no checksum, so guppy cannot verify what it downloads; "+
+				"set allow_unverified: true in %s to install it anyway",
+				a.Name(), latest.Version, a.Path())
+		}
+	}
+
 	// Download.
 	i.printf("%s: downloading %s...\n", a.Name(), latest.Version)
 	if err := os.MkdirAll(downloadDir, 0755); err != nil {
@@ -142,7 +156,10 @@ func (i *Installer) Install(a *config.App) error {
 		}
 		i.printf("%s: ✓ checksum verified\n", a.Name())
 	} else {
-		i.debugf("No checksum available for %s", latest.Version)
+		// Only reachable with allow_unverified set. Say so on stdout: a
+		// warning nobody sees without --debug is not a warning.
+		i.printf("%s: ⚠ installing %s unverified (no checksum; allow_unverified is set)\n",
+			a.Name(), latest.Version)
 	}
 
 	if err := os.MkdirAll(installDir, 0755); err != nil {

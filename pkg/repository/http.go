@@ -33,7 +33,7 @@ func (h *HTTPRepository) SetDebug(enabled bool) {
 }
 
 // debugLog prints a debug message if debug mode is enabled
-func (h *HTTPRepository) debugLog(format string, args ...interface{}) {
+func (h *HTTPRepository) debugLog(format string, args ...any) {
 	if h.debug {
 		fmt.Fprintf(os.Stderr, "[DEBUG] "+format+"\n", args...)
 	}
@@ -71,7 +71,7 @@ func (h *HTTPRepository) fetchReleases() ([]httpRelease, error) {
 	}
 
 	var releases []httpRelease
-	if err := json.NewDecoder(resp.Body).Decode(&releases); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, MaxFeedBytes)).Decode(&releases); err != nil {
 		return nil, fmt.Errorf("error decoding releases JSON: %w", err)
 	}
 
@@ -115,7 +115,7 @@ func (h *HTTPRepository) GetLatestRelease() (*Release, error) {
 	}
 
 	h.debugLog("Latest release: %s", latestRelease.Version)
-	return h.convertHTTPRelease(latestRelease), nil
+	return h.convertHTTPRelease(latestRelease)
 }
 
 // GetRelease returns a specific release by version
@@ -130,7 +130,7 @@ func (h *HTTPRepository) GetRelease(version string) (*Release, error) {
 	for i := range releases {
 		if releases[i].Version == version {
 			h.debugLog("Found matching release: %s", version)
-			return h.convertHTTPRelease(&releases[i]), nil
+			return h.convertHTTPRelease(&releases[i])
 		}
 	}
 
@@ -180,9 +180,10 @@ func (h *HTTPRepository) Download(release *Release, dest string) error {
 	}
 	defer func() { _ = out.Close() }()
 
-	// Copy the content
-	_, err = io.Copy(out, resp.Body)
-	if err != nil {
+	// Copy the content, bounded: the server decides how much it sends.
+	if _, err := copyLimited(out, resp.Body, MaxDownloadBytes, "download"); err != nil {
+		_ = out.Close()
+		_ = os.Remove(dest)
 		return fmt.Errorf("error writing to destination: %w", err)
 	}
 
@@ -193,7 +194,7 @@ func (h *HTTPRepository) Download(release *Release, dest string) error {
 }
 
 // convertHTTPRelease converts an HTTP release to our Release type
-func (h *HTTPRepository) convertHTTPRelease(httpRel *httpRelease) *Release {
+func (h *HTTPRepository) convertHTTPRelease(httpRel *httpRelease) (*Release, error) {
 	checksum, checksumType := h.selectChecksum(httpRel)
 	if checksum != "" {
 		h.debugLog("Selected %s checksum: %s", checksumType, checksum)
@@ -201,8 +202,12 @@ func (h *HTTPRepository) convertHTTPRelease(httpRel *httpRelease) *Release {
 		h.debugLog("WARNING: No checksum available for version %s", httpRel.Version)
 	}
 
-	// Extract filename from URL
+	// Extract filename from URL. The feed chose this string and it becomes a
+	// path, so it is checked rather than trusted.
 	fileName := filepath.Base(httpRel.URL)
+	if err := ValidateFileName(fileName); err != nil {
+		return nil, fmt.Errorf("release %s: %w", httpRel.Version, err)
+	}
 
 	return &Release{
 		Version:     httpRel.Version,
@@ -212,7 +217,7 @@ func (h *HTTPRepository) convertHTTPRelease(httpRel *httpRelease) *Release {
 		// ReleaseDate is not available in the HTTP format
 		ReleaseDate: time.Time{},
 		AssetID:     0,
-	}
+	}, nil
 }
 
 // selectChecksum selects the highest priority checksum from available options

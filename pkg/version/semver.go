@@ -80,9 +80,10 @@ func (v *Version) String() string {
 
 // Compare compares two versions
 // Returns:
-//   -1 if v < other
-//    0 if v == other
-//    1 if v > other
+//
+//	-1 if v < other
+//	 0 if v == other
+//	 1 if v > other
 func (v *Version) Compare(other *Version) int {
 	if v.Major != other.Major {
 		if v.Major > other.Major {

@@ -45,10 +45,23 @@ func (g *GitHubRepository) SetDebug(enabled bool) {
 }
 
 // debugLog prints a debug message if debug mode is enabled
-func (g *GitHubRepository) debugLog(format string, args ...interface{}) {
+func (g *GitHubRepository) debugLog(format string, args ...any) {
 	if g.debug {
 		fmt.Fprintf(os.Stderr, "[DEBUG] "+format+"\n", args...)
 	}
+}
+
+// setAuth attaches the token, if there is one.
+//
+// The token is never logged. Debug output routinely ends up in bug reports and
+// CI logs, and whether authentication was attached is the only part of this
+// that helps anyone debug a 401.
+func (g *GitHubRepository) setAuth(req *http.Request) {
+	if g.Token == "" {
+		return
+	}
+	req.Header.Set("Authorization", "token "+g.Token)
+	g.debugLog("Authorization header set (token redacted)")
 }
 
 // githubAsset represents a single downloadable file attached to a release
@@ -80,11 +93,7 @@ func (g *GitHubRepository) GetLatestRelease() (*Release, error) {
 	req.Header.Set("User-Agent", "guppy-updater")
 	req.Header.Set("Accept", "application/vnd.github.v3+json")
 
-	if g.Token != "" {
-		authValue := fmt.Sprintf("token %s", g.Token)
-		req.Header.Set("Authorization", authValue)
-		g.debugLog("Request header set: Authorization: %s", authValue)
-	}
+	g.setAuth(req)
 
 	resp, err := g.httpClient.Do(req)
 	if err != nil {
@@ -98,7 +107,7 @@ func (g *GitHubRepository) GetLatestRelease() (*Release, error) {
 	}
 
 	var ghRelease githubRelease
-	if err := json.NewDecoder(resp.Body).Decode(&ghRelease); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, MaxFeedBytes)).Decode(&ghRelease); err != nil {
 		return nil, fmt.Errorf("error decoding response: %w", err)
 	}
 
@@ -123,11 +132,7 @@ func (g *GitHubRepository) GetRelease(version string) (*Release, error) {
 	req.Header.Set("User-Agent", "guppy-updater")
 	req.Header.Set("Accept", "application/vnd.github.v3+json")
 
-	if g.Token != "" {
-		authValue := fmt.Sprintf("token %s", g.Token)
-		req.Header.Set("Authorization", authValue)
-		g.debugLog("Request header set: Authorization: %s", authValue)
-	}
+	g.setAuth(req)
 
 	resp, err := g.httpClient.Do(req)
 	if err != nil {
@@ -141,7 +146,7 @@ func (g *GitHubRepository) GetRelease(version string) (*Release, error) {
 	}
 
 	var ghRelease githubRelease
-	if err := json.NewDecoder(resp.Body).Decode(&ghRelease); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, MaxFeedBytes)).Decode(&ghRelease); err != nil {
 		return nil, fmt.Errorf("error decoding response: %w", err)
 	}
 
@@ -175,11 +180,7 @@ func (g *GitHubRepository) Download(release *Release, dest string) error {
 	req.Header.Set("User-Agent", "guppy-updater")
 	req.Header.Set("Accept", "application/octet-stream")
 
-	if g.Token != "" {
-		authValue := fmt.Sprintf("token %s", g.Token)
-		req.Header.Set("Authorization", authValue)
-		g.debugLog("Request header set: Authorization: %s", authValue)
-	}
+	g.setAuth(req)
 
 	resp, err := g.httpClient.Do(req)
 	if err != nil {
@@ -204,9 +205,10 @@ func (g *GitHubRepository) Download(release *Release, dest string) error {
 	}
 	defer func() { _ = out.Close() }()
 
-	// Copy the content
-	_, err = io.Copy(out, resp.Body)
-	if err != nil {
+	// Copy the content, bounded: the server decides how much it sends.
+	if _, err := copyLimited(out, resp.Body, MaxDownloadBytes, "download"); err != nil {
+		_ = out.Close()
+		_ = os.Remove(dest)
 		return fmt.Errorf("error writing to destination: %w", err)
 	}
 
@@ -254,6 +256,11 @@ func (g *GitHubRepository) convertGitHubRelease(ghRelease *githubRelease) (*Rele
 
 	if checksum == "" {
 		g.debugLog("WARNING: No checksum available for asset %s", fileName)
+	}
+
+	// The asset name is whatever the API said it was, and it becomes a path.
+	if err := ValidateFileName(fileName); err != nil {
+		return nil, err
 	}
 
 	return &Release{

@@ -297,7 +297,10 @@ func TestConvertHTTPRelease(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			h := NewHTTPRepository("http://example.com/releases.json")
-			release := h.convertHTTPRelease(tt.httpRel)
+			release, err := h.convertHTTPRelease(tt.httpRel)
+			if err != nil {
+				t.Fatalf("convertHTTPRelease() error: %v", err)
+			}
 
 			if release.Version != tt.httpRel.Version {
 				t.Errorf("convertHTTPRelease() version = %q, want %q", release.Version, tt.httpRel.Version)
