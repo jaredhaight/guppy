@@ -124,6 +124,14 @@ func TestIsNewer(t *testing.T) {
 		{"1.0.0", "2.0.0", false},
 		{"1.0.0", "1.0.0", false},
 		{"1.0.1", "1.0.0", true},
+
+		// Guppy's own vYYYY.DDD.N tags, which it parses to decide whether to
+		// update itself. The day of year is zero-padded in the tag, so this
+		// also pins that "003" still reads as 3.
+		{"v2026.209.2", "v2026.209.1", true},    // second release of one day
+		{"v2026.210.1", "v2026.209.11", true},   // next day, counter reset to 1
+		{"v2027.003.1", "v2026.366.4", true},    // year rolls over
+		{"v2026.209.1", "v2026.0728.24", false}, // the old MMDD tags outrank it
 	}
 
 	for _, tt := range tests {

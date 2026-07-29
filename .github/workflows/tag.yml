@@ -44,16 +44,25 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
-      # vYYYY.MMDD.N, matching the tags already published. N is a global
-      # counter, not a per-day one: v2025.1107.18, v2025.1110.19, v2026.0728.22.
+      # vYYYY.DDD.N — year, zero-padded day of year, and the Nth release of
+      # that day: v2026.209.1, v2026.209.2, v2027.003.1.
+      #
+      # ponytail: this sorts *below* the vYYYY.MMDD.N tags it replaces, because
+      # guppy compares each dotted field numerically and a day of year never
+      # reaches 728. Installs sitting on v2026.0728.24 won't see a new release
+      # until 2027 and have to re-run install.sh once. Nothing to fix here; the
+      # scheme is the ask.
       - name: Next version
         id: next
         run: |
-          n=$(git tag --list 'v*' \
-            | grep -E '^v[0-9]{4}\.[0-9]{4}\.[0-9]+$' \
+          prefix="v$(date -u +%Y.%j)"
+          # The grep is load-bearing: $NF of a stray tag like v2026.209.1-rc
+          # would blow up the arithmetic below.
+          n=$(git tag --list "${prefix}.*" \
+            | grep -E "^${prefix}\.[0-9]+$" \
             | awk -F. '{print $NF}' \
             | sort -n | tail -1)
-          version="v$(date -u +%Y.%m%d).$((${n:-0} + 1))"
+          version="${prefix}.$((${n:-0} + 1))"
           echo "Next version: ${version}"
           echo "version=${version}" >> "$GITHUB_OUTPUT"
 

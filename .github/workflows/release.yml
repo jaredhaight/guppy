@@ -4,7 +4,7 @@ name: Release
 # that touched Go code or an install script, and passes the version it
 # computed; the release creates the tag. A tag pushed by hand still works:
 #
-#   git tag -a v2026.0728.23 -m 'v2026.0728.23' && git push origin v2026.0728.23
+#   git tag -a v2026.209.1 -m 'v2026.209.1' && git push origin v2026.209.1
 #
 # Either way the tag -> artifact mapping stays reviewable, because the version
 # is always an explicit input or the ref itself, never a run number.
@@ -15,13 +15,13 @@ on:
   workflow_call:
     inputs:
       version:
-        description: 'Version to release, e.g. v2026.0728.23'
+        description: 'Version to release, e.g. v2026.209.1'
         required: true
         type: string
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version to release, e.g. v2026.0728.23'
+        description: 'Version to release, e.g. v2026.209.1'
         required: true
         type: string
 
@@ -85,7 +85,7 @@ jobs:
           case "$VERSION" in
             v[0-9]*.[0-9]*.[0-9]*) ;;
             *)
-              echo "refusing to release ${VERSION}: expected vYYYY.MMDD.N" >&2
+              echo "refusing to release ${VERSION}: expected vYYYY.DDD.N" >&2
               exit 1
               ;;
           esac
@@ -159,7 +159,7 @@ jobs:
           case "$VERSION" in
             v[0-9]*.[0-9]*.[0-9]*) ;;
             *)
-              echo "refusing to release ${VERSION}: expected vYYYY.MMDD.N" >&2
+              echo "refusing to release ${VERSION}: expected vYYYY.DDD.N" >&2
               exit 1
               ;;
           esac
